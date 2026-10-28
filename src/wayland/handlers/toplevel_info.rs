@@ -6,8 +6,11 @@ use crate::{
     shell::CosmicSurface,
     state::State,
     utils::prelude::Global,
-    wayland::protocols::toplevel_info::{
-        ToplevelInfoHandler, ToplevelInfoState, Window, delegate_toplevel_info,
+    wayland::protocols::{
+        toplevel_info::{ToplevelInfoHandler, ToplevelInfoState, Window, delegate_toplevel_info},
+        wlr_foreign_toplevel::{
+            WlrForeignToplevelHandler, WlrForeignToplevelState, delegate_wlr_foreign_toplevel,
+        },
     },
 };
 
@@ -64,4 +67,11 @@ impl Window for CosmicSurface {
     }
 }
 
+impl WlrForeignToplevelHandler for State {
+    fn wlr_foreign_toplevel_state(&mut self) -> &mut WlrForeignToplevelState<State, CosmicSurface> {
+        &mut self.common.wlr_foreign_toplevel_state
+    }
+}
+
 delegate_toplevel_info!(State, CosmicSurface);
+delegate_wlr_foreign_toplevel!(State, CosmicSurface);

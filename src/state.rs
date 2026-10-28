@@ -26,6 +26,7 @@ use crate::{
             session_lock_layer::SessionLockLayerState,
             toplevel_info::ToplevelInfoState,
             toplevel_management::{ManagementCapabilities, ToplevelManagementState},
+            wlr_foreign_toplevel::WlrForeignToplevelState,
             workspace::{WorkspaceState, WorkspaceUpdateGuard},
         },
     },
@@ -314,6 +315,7 @@ pub struct Common {
     pub layer_shell_state: WlrLayerShellState,
     pub toplevel_info_state: ToplevelInfoState<State, CosmicSurface>,
     pub toplevel_management_state: ToplevelManagementState,
+    pub wlr_foreign_toplevel_state: WlrForeignToplevelState<State, CosmicSurface>,
     pub xdg_activation_state: XdgActivationState,
     pub xdg_foreign_state: XdgForeignState,
     pub workspace_state: WorkspaceState<State>,
@@ -762,6 +764,8 @@ impl State {
         );
         let workspace_state = WorkspaceState::new(dh, client_not_sandboxed);
 
+        let wlr_foreign_toplevel_state = WlrForeignToplevelState::new(dh, client_not_sandboxed);
+
         let a11y_state = A11yState::new::<State, _>(dh, client_not_sandboxed);
 
         let dbus_state = DBusState::init(&handle);
@@ -825,6 +829,7 @@ impl State {
                 layer_shell_state,
                 toplevel_info_state,
                 toplevel_management_state,
+                wlr_foreign_toplevel_state,
                 xdg_activation_state,
                 xdg_foreign_state,
                 workspace_state,

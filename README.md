@@ -1,13 +1,14 @@
 # cosmic-comp-traffic
 
 Fork of [pop-os/cosmic-comp](https://github.com/pop-os/cosmic-comp) that adds
-macOS-style traffic-light window decorations and a soft focus ring, and ships a
-ready-to-install **Arch Linux package for every upstream release tag**.
+macOS-style traffic-light window decorations and a soft focus ring, implements
+`zwlr_foreign_toplevel_manager_v1` so third-party docks and taskbars work, and
+ships a ready-to-install **Arch Linux package for every upstream release tag**.
 
 - Releases: <https://github.com/grigio/cosmic-comp-traffic/releases>
 - Base version: upstream tag `epoch-1.10.0` and newer
 
-## What the patch changes
+## What the patches change
 
 | File | Change |
 |---|---|
@@ -16,8 +17,33 @@ ready-to-install **Arch Linux package for every upstream release tag**.
 | `src/backend/render/shaders/rounded_outline.frag` | Signed-distance ring with `FEATHER = 1.5` logical px of falloff on both edges instead of a hard band. |
 | `src/backend/render/mod.rs` | Focus ring element gets 2 px of extra geometry (`pad`) so the glow is not clipped. Other indicators keep `pad: 0`. |
 
-The patch lives in [`patches/common/0001-macos-traffic-light-decorations.patch`](patches/common/0001-macos-traffic-light-decorations.patch)
-and applies cleanly to `epoch-1.10.0` and `epoch-1.11.0`.
+Both patches live in `patches/common/` and apply cleanly to `epoch-1.10.0` and
+`epoch-1.11.0`:
+
+- [`0001-macos-traffic-light-decorations.patch`](patches/common/0001-macos-traffic-light-decorations.patch)
+  — the traffic lights and the focus ring described above.
+- [`0002-wlr-foreign-toplevel-management.patch`](patches/common/0002-wlr-foreign-toplevel-management.patch)
+  — `zwlr_foreign_toplevel_manager_v1`, described below.
+
+## zwlr_foreign_toplevel_manager_v1
+
+Upstream exposes `ext_foreign_toplevel_list_v1`, which carries title and
+app-id but neither toplevel state nor requests, so docks that speak the wlr
+protocol (waybar's `wlr/taskbar`, sfwbar, lxqt-panel, noctalia, ...) see no
+windows at all on COSMIC ([pop-os/cosmic-comp#3002](https://github.com/pop-os/cosmic-comp/issues/3002)).
+
+The second patch adds the wlr manager (version 3) next to the existing globals,
+behind the same `client_not_sandboxed` filter:
+
+| File | Change |
+|---|---|
+| `src/wayland/protocols/wlr_foreign_toplevel.rs` | New. Mirrors the toplevels tracked by `ToplevelInfoState` to every bound manager (`title`, `app_id`, `output_enter/leave`, `state`, `done`, `closed`) and forwards `activate`, `close`, `set/unset_minimized`, `set/unset_maximized` and `set/unset_fullscreen` to `ToplevelManagementHandler`, so the actions behave exactly like `zcosmic_toplevel_manager_v1`. |
+| `src/wayland/handlers/wlr_foreign_toplevel.rs` | New. Implements the handler for `State` and delegates the two protocol objects. |
+| `src/wayland/protocols/toplevel_info.rs` | Exposes the outputs a toplevel is on, so the wlr handles can send `output_enter`/`output_leave`. |
+| `src/state.rs`, `src/shell/mod.rs` | Creates the global and refreshes the wlr handles from `Common::refresh`, right after the toplevel-info refresh. |
+
+`ext_foreign_toplevel_list_v1` and the COSMIC protocols are untouched; this is
+purely additive for clients that only know the wlr protocol.
 
 ## Install
 

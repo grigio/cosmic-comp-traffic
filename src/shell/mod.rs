@@ -1641,6 +1641,12 @@ impl Common {
         );
         self.popups.cleanup();
         self.toplevel_info_state.refresh(&self.workspace_state);
+        let toplevels = self
+            .toplevel_info_state
+            .registered_toplevels()
+            .cloned()
+            .collect::<Vec<_>>();
+        self.wlr_foreign_toplevel_state.refresh(&toplevels);
         self.refresh_idle_inhibit();
         if let Some(mut a11y_keyboard_monitor) = self.dbus_state.a11y_keyboard_monitor() {
             a11y_keyboard_monitor.refresh();

@@ -11,4 +11,5 @@ pub mod overlap_notify;
 pub mod session_lock_layer;
 pub mod toplevel_info;
 pub mod toplevel_management;
+pub mod wlr_foreign_toplevel;
 pub mod workspace;

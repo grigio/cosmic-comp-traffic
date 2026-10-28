@@ -92,6 +92,12 @@ impl ToplevelStateInner {
     pub fn in_workspace(&self, handle: &WorkspaceHandle) -> bool {
         self.workspaces.contains(handle)
     }
+
+    /// Outputs this toplevel is currently on; used by the wlr
+    /// foreign-toplevel-management implementation.
+    pub fn outputs(&self) -> &[Output] {
+        &self.outputs
+    }
 }
 
 pub struct ToplevelHandleStateInner<W: Window> {
