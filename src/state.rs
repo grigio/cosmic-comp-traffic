@@ -1192,31 +1192,30 @@ impl Common {
             }
         }
 
-        shell
-            .workspaces
-            .sets
-            .get(output)
-            .unwrap()
-            .sticky_layer
-            .mapped()
-            .for_each(|mapped| {
-                for (window, _) in mapped.windows() {
-                    if let Some(feedback) = window
-                        .wl_surface()
-                        .and_then(|wl_surface| {
-                            advertised_node_for_surface(&wl_surface, &self.display_handle)
-                        })
-                        .and_then(&mut dmabuf_feedback)
-                    {
-                        window.send_dmabuf_feedback(
-                            output,
-                            &feedback,
-                            render_element_states,
-                            surface_primary_scanout_output,
-                        );
-                    }
+        // The output may have been removed while its surface thread was still
+        // sending feedback; there is nothing left to send in that case.
+        let Some(set) = shell.workspaces.sets.get(output) else {
+            return;
+        };
+
+        set.sticky_layer.mapped().for_each(|mapped| {
+            for (window, _) in mapped.windows() {
+                if let Some(feedback) = window
+                    .wl_surface()
+                    .and_then(|wl_surface| {
+                        advertised_node_for_surface(&wl_surface, &self.display_handle)
+                    })
+                    .and_then(&mut dmabuf_feedback)
+                {
+                    window.send_dmabuf_feedback(
+                        output,
+                        &feedback,
+                        render_element_states,
+                        surface_primary_scanout_output,
+                    );
                 }
-            });
+            }
+        });
 
         if let Some(active) = shell.active_space(output) {
             if let Some(fs) = active.get_fullscreen(shell.seats.last_active())

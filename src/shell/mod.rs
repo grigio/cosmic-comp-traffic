@@ -1388,12 +1388,16 @@ impl Workspaces {
     }
 
     pub fn active_num(&self, output: &Output) -> (Option<usize>, usize) {
-        let set = self.sets.get(output).or(self.backup_set.as_ref()).unwrap();
+        let Some(set) = self.sets.get(output).or(self.backup_set.as_ref()) else {
+            // The output can be removed while a surface thread is still
+            // finishing a frame; there is no active workspace to report then.
+            return (None, 0);
+        };
         (set.previously_active.map(|(idx, _)| idx), set.active)
     }
 
     pub fn idx_for_handle(&self, output: &Output, handle: &WorkspaceHandle) -> Option<usize> {
-        let set = self.sets.get(output).unwrap();
+        let set = self.sets.get(output)?;
         set.workspaces
             .iter()
             .enumerate()
@@ -1401,8 +1405,7 @@ impl Workspaces {
     }
 
     pub fn len(&self, output: &Output) -> usize {
-        let set = self.sets.get(output).unwrap();
-        set.workspaces.len()
+        self.sets.get(output).map_or(0, |set| set.workspaces.len())
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&Output, &WorkspaceSet)> {
@@ -2139,16 +2142,19 @@ impl Shell {
             // sticky window ?
             .or_else(|| {
                 self.outputs().find(|o| {
-                    self.workspaces.sets[*o]
-                        .sticky_layer
-                        .mapped()
-                        .any(|e| e.has_surface(surface, WindowSurfaceType::ALL))
+                    self.workspaces.sets.get(*o).is_some_and(|set| {
+                        set.sticky_layer
+                            .mapped()
+                            .any(|e| e.has_surface(surface, WindowSurfaceType::ALL))
+                    })
                 })
             })
             // normal window?
             .or_else(|| {
                 self.outputs().find(|o| {
-                    let workspace = self.active_space(o).unwrap();
+                    let Some(workspace) = self.active_space(o) else {
+                        return false;
+                    };
 
                     workspace
                         .get_fullscreen_surfaces()
@@ -4258,7 +4264,9 @@ impl Shell {
             return FocusResult::None;
         }
 
-        let set = self.workspaces.sets.get(&output).unwrap();
+        let Some(set) = self.workspaces.sets.get(&output) else {
+            return FocusResult::None;
+        };
         let sticky_layer = &set.sticky_layer;
         let workspace = &set.workspaces[set.active];
 

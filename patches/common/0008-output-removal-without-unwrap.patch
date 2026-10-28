@@ -1,0 +1,128 @@
+diff --git a/src/shell/mod.rs b/src/shell/mod.rs
+index 84d0b33e..9bb3c5e2 100644
+--- a/src/shell/mod.rs
++++ b/src/shell/mod.rs
+@@ -1388,12 +1388,16 @@ impl Workspaces {
+     }
+ 
+     pub fn active_num(&self, output: &Output) -> (Option<usize>, usize) {
+-        let set = self.sets.get(output).or(self.backup_set.as_ref()).unwrap();
++        let Some(set) = self.sets.get(output).or(self.backup_set.as_ref()) else {
++            // The output can be removed while a surface thread is still
++            // finishing a frame; there is no active workspace to report then.
++            return (None, 0);
++        };
+         (set.previously_active.map(|(idx, _)| idx), set.active)
+     }
+ 
+     pub fn idx_for_handle(&self, output: &Output, handle: &WorkspaceHandle) -> Option<usize> {
+-        let set = self.sets.get(output).unwrap();
++        let set = self.sets.get(output)?;
+         set.workspaces
+             .iter()
+             .enumerate()
+@@ -1401,8 +1405,7 @@ impl Workspaces {
+     }
+ 
+     pub fn len(&self, output: &Output) -> usize {
+-        let set = self.sets.get(output).unwrap();
+-        set.workspaces.len()
++        self.sets.get(output).map_or(0, |set| set.workspaces.len())
+     }
+ 
+     pub fn iter(&self) -> impl Iterator<Item = (&Output, &WorkspaceSet)> {
+@@ -2139,16 +2142,19 @@ impl Shell {
+             // sticky window ?
+             .or_else(|| {
+                 self.outputs().find(|o| {
+-                    self.workspaces.sets[*o]
+-                        .sticky_layer
+-                        .mapped()
+-                        .any(|e| e.has_surface(surface, WindowSurfaceType::ALL))
++                    self.workspaces.sets.get(*o).is_some_and(|set| {
++                        set.sticky_layer
++                            .mapped()
++                            .any(|e| e.has_surface(surface, WindowSurfaceType::ALL))
++                    })
+                 })
+             })
+             // normal window?
+             .or_else(|| {
+                 self.outputs().find(|o| {
+-                    let workspace = self.active_space(o).unwrap();
++                    let Some(workspace) = self.active_space(o) else {
++                        return false;
++                    };
+ 
+                     workspace
+                         .get_fullscreen_surfaces()
+@@ -4258,7 +4264,9 @@ impl Shell {
+             return FocusResult::None;
+         }
+ 
+-        let set = self.workspaces.sets.get(&output).unwrap();
++        let Some(set) = self.workspaces.sets.get(&output) else {
++            return FocusResult::None;
++        };
+         let sticky_layer = &set.sticky_layer;
+         let workspace = &set.workspaces[set.active];
+ 
+diff --git a/src/state.rs b/src/state.rs
+index 64494124..6827d855 100644
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -1192,31 +1192,30 @@ impl Common {
+             }
+         }
+ 
+-        shell
+-            .workspaces
+-            .sets
+-            .get(output)
+-            .unwrap()
+-            .sticky_layer
+-            .mapped()
+-            .for_each(|mapped| {
+-                for (window, _) in mapped.windows() {
+-                    if let Some(feedback) = window
+-                        .wl_surface()
+-                        .and_then(|wl_surface| {
+-                            advertised_node_for_surface(&wl_surface, &self.display_handle)
+-                        })
+-                        .and_then(&mut dmabuf_feedback)
+-                    {
+-                        window.send_dmabuf_feedback(
+-                            output,
+-                            &feedback,
+-                            render_element_states,
+-                            surface_primary_scanout_output,
+-                        );
+-                    }
++        // The output may have been removed while its surface thread was still
++        // sending feedback; there is nothing left to send in that case.
++        let Some(set) = shell.workspaces.sets.get(output) else {
++            return;
++        };
++
++        set.sticky_layer.mapped().for_each(|mapped| {
++            for (window, _) in mapped.windows() {
++                if let Some(feedback) = window
++                    .wl_surface()
++                    .and_then(|wl_surface| {
++                        advertised_node_for_surface(&wl_surface, &self.display_handle)
++                    })
++                    .and_then(&mut dmabuf_feedback)
++                {
++                    window.send_dmabuf_feedback(
++                        output,
++                        &feedback,
++                        render_element_states,
++                        surface_primary_scanout_output,
++                    );
+                 }
+-            });
++            }
++        });
+ 
+         if let Some(active) = shell.active_space(output) {
+             if let Some(fs) = active.get_fullscreen(shell.seats.last_active())
