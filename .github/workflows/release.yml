@@ -136,6 +136,11 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.discover.outputs.matrix) }}
     steps:
+      # git has to exist before checkout, otherwise actions/checkout falls back to
+      # downloading a tarball and there is no history for the pkgrel calculation.
+      - name: Bootstrap git
+        run: pacman -Syu --noconfirm --needed --disable-download-timeout git
+
       - uses: actions/checkout@v4
         with:
           # full history: pkgrel is derived from the commit count of PKGBUILD+patches
@@ -143,7 +148,6 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          pacman -Syu --noconfirm --needed --disable-download-timeout
           pacman -S --noconfirm --needed --disable-download-timeout \
             cargo git just lld github-cli sudo \
             fontconfig libdisplay-info libinput libxcb libxkbcommon mesa pixman systemd-libs wayland
@@ -218,9 +222,14 @@ jobs:
           # instead of at a random commit of this fork.
           if ! git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             echo "mirroring upstream tag $TAG"
-            git fetch --no-tags --depth=1 "https://github.com/$UPSTREAM_REPO.git" "refs/tags/$TAG:refs/tags/$TAG"
+            git fetch --no-tags "https://github.com/$UPSTREAM_REPO.git" "refs/tags/$TAG:refs/tags/$TAG"
             git push origin "refs/tags/$TAG"
           fi
+
+          patch_list=$(
+            { ls patches/common/*.patch 2>/dev/null; ls "patches/$VERSION"/*.patch 2>/dev/null; } |
+              sed 's|^|* `|; s|$|`|' || true
+          )
 
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "release $TAG exists, uploading assets"
@@ -246,8 +255,9 @@ jobs:
 
           ### Patches
 
-          Applied from \`patches/common/\` and \`patches/$VERSION/\` at build time:
-          $(ls patches/common/*.patch patches/"$VERSION"/*.patch 2>/dev/null | sed 's|^|* `|; s|$|`|')
+          Applied at build time:
+
+          $patch_list
 
           Revert with \`sudo pacman -S cosmic-comp\`.
           EOF
