@@ -28,7 +28,13 @@ for f in "$dir"/*.pkg.tar.zst; do
   [[ $(basename "$f") == *-debug-* ]] && continue
   pkgs+=("$f")
 done
-sudo pacman -U --noconfirm "${pkgs[@]}"
+if [[ ${#pkgs[@]} -eq 0 ]]; then
+  echo "no package found in the release" >&2
+  exit 1
+fi
+# a rebuilt release can still carry an older pkgrel: install the newest one
+mapfile -t pkgs < <(printf '%s\n' "${pkgs[@]}" | sort -V)
+sudo pacman -U --noconfirm "${pkgs[-1]}"
 
 echo
 echo "Installed. cosmic-comp is replaced at the next login; revert with:"
