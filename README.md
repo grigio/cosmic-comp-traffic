@@ -79,7 +79,14 @@ patch change automatically produces a version pacman considers an upgrade.
 | push to `master` touching `PKGBUILD`, `patches/**` or the workflow | rebuilds the newest tag and overwrites its release |
 
 > Scheduled workflows are disabled by default in forks — keep them enabled under
-> *Actions* in the repository settings.
+> *Actions* in the repository settings. Upstream's own `ci.yml` and
+> `require-checklist.yml` workflows are disabled here on purpose: they test
+> upstream code, not the packaging.
+
+The release asset is named `cosmic-comp-traffic-<version>-<pkgrel>-x86_64.pkg.tar.zst`
+(the epoch is dropped from the file name because release assets cannot contain
+`:`); the version inside the package is still `1:<version>-<pkgrel>`, matching
+the official `cosmic-comp` epoch.
 
 ## Adding a patch for a new upstream release
 

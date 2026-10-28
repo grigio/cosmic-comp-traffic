@@ -21,7 +21,14 @@ else
 fi
 
 (cd "$dir" && sha256sum --check --quiet ./*.pkg.tar.zst.sha256)
-sudo pacman -U --noconfirm "$dir"/*.pkg.tar.zst
+
+# install the compositor package, not the optional -debug one
+pkgs=()
+for f in "$dir"/*.pkg.tar.zst; do
+  [[ $(basename "$f") == *-debug-* ]] && continue
+  pkgs+=("$f")
+done
+sudo pacman -U --noconfirm "${pkgs[@]}"
 
 echo
 echo "Installed. cosmic-comp is replaced at the next login; revert with:"
