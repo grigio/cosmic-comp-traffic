@@ -18,6 +18,7 @@ use crate::{
             a11y::A11yState,
             corner_radius::CornerRadiusState,
             drm::WlDrmState,
+            gamma_control::GammaControlState,
             image_capture_source::CosmicImageCaptureSourceState,
             keyboard_layout::KeyboardLayoutState,
             output_configuration::OutputConfigurationState,
@@ -285,6 +286,7 @@ pub struct Common {
     pub output_state: OutputManagerState,
     pub output_configuration_state: OutputConfigurationState<State>,
     pub output_power_state: OutputPowerState,
+    pub gamma_control_state: GammaControlState,
     pub presentation_state: PresentationState,
     pub primary_selection_state: PrimarySelectionState,
     pub ext_data_control_state: ExtDataControlState,
@@ -680,6 +682,7 @@ impl State {
         let output_configuration_state =
             OutputConfigurationState::new(dh, handle.clone(), client_not_sandboxed);
         let output_power_state = OutputPowerState::new::<Self, _>(dh, client_not_sandboxed);
+        let gamma_control_state = GammaControlState::new::<Self, _>(dh, client_not_sandboxed);
         let overlap_notify_state =
             OverlapNotifyState::new::<Self, _>(dh, client_has_no_security_context);
         let presentation_state = PresentationState::new::<Self>(dh, clock.id() as u32);
@@ -816,6 +819,7 @@ impl State {
                 output_state,
                 output_configuration_state,
                 output_power_state,
+                gamma_control_state,
                 overlap_notify_state,
                 presentation_state,
                 primary_selection_state,

@@ -6,8 +6,9 @@ use crate::{
     backend::kms::Surface,
     state::{BackendData, State},
     utils::prelude::OutputExt,
-    wayland::protocols::output_power::{
-        OutputPowerHandler, OutputPowerState, delegate_output_power,
+    wayland::protocols::{
+        gamma_control::GammaControlState,
+        output_power::{OutputPowerHandler, OutputPowerState, delegate_output_power},
     },
 };
 
@@ -27,7 +28,14 @@ pub fn set_all_surfaces_dpms_on(state: &mut State) {
         let seat = state.common.shell.read().seats.last_active().clone();
         state.common.idle_notifier_state.notify_activity(&seat);
         OutputPowerState::refresh(state);
+        reapply_gamma_after_dpms_on(state);
     }
+}
+
+/// Powering a CRTC back on can drop its gamma LUT, so put the night light table
+/// back whenever an output wakes up.
+pub fn reapply_gamma_after_dpms_on(state: &mut State) {
+    GammaControlState::reapply(state);
 }
 
 fn kms_surfaces(state: &mut State) -> impl Iterator<Item = &mut Surface> {
@@ -76,6 +84,10 @@ impl OutputPowerHandler for State {
     fn set_dpms(&mut self, output: &Output, on: bool) {
         for surface in kms_surfaces_for_output(self, output) {
             surface.set_dpms(on);
+        }
+
+        if on {
+            reapply_gamma_after_dpms_on(self);
         }
     }
 }

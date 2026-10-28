@@ -2,7 +2,8 @@
 
 Fork of [pop-os/cosmic-comp](https://github.com/pop-os/cosmic-comp) that adds
 macOS-style traffic-light window decorations and a soft focus ring, implements
-`zwlr_foreign_toplevel_manager_v1` so third-party docks and taskbars work, cycles
+`zwlr_foreign_toplevel_manager_v1` so third-party docks and taskbars work,
+implements `wlr-gamma-control-unstable-v1` so night light clients work, cycles
 windows on Alt+Tab without a switcher popup, and ships a ready-to-install
 **Arch Linux package for every upstream release tag**.
 
@@ -19,7 +20,7 @@ windows on Alt+Tab without a switcher popup, and ships a ready-to-install
 | `src/backend/render/mod.rs` | Focus ring element gets 2 px of extra geometry (`pad`) so the glow is not clipped. Other indicators keep `pad: 0`. |
 | `src/input/actions.rs` | `System(WindowSwitcher)` / `System(WindowSwitcherPrevious)` cycle the focus through the windows of the active workspace in stacking order instead of spawning a switcher UI — see [Alt+Tab](#alttab). |
 
-All four patches live in `patches/common/` and apply cleanly to `epoch-1.10.0`
+All five patches live in `patches/common/` and apply cleanly to `epoch-1.10.0`
 and `epoch-1.11.0`:
 
 - [`0001-macos-traffic-light-decorations.patch`](patches/common/0001-macos-traffic-light-decorations.patch)
@@ -30,6 +31,8 @@ and `epoch-1.11.0`:
   — three-finger touchpad swipes switch workspaces.
 - [`0004-alt-tab-window-cycle.patch`](patches/common/0004-alt-tab-window-cycle.patch)
   — in-process Alt+Tab window cycling, described below.
+- [`0005-wlr-gamma-control.patch`](patches/common/0005-wlr-gamma-control.patch)
+  — `wlr-gamma-control-unstable-v1`, described below.
 
 ## Alt+Tab
 
@@ -77,6 +80,37 @@ behind the same `client_not_sandboxed` filter:
 
 `ext_foreign_toplevel_list_v1` and the COSMIC protocols are untouched; this is
 purely additive for clients that only know the wlr protocol.
+
+## wlr-gamma-control (night light)
+
+Night light clients do not draw a red overlay: they reprogram the display's gamma
+lookup table through `wlr-gamma-control-unstable-v1`. Upstream advertises neither
+that protocol nor `wp_color_manager_v1`, so the night light toggle in noctalia (or
+`gammastep`, `wlsunset`, `wl-gammarelay`, …) silently does nothing — noctalia logs
+`compositor does not support gamma control` and leaves the screen untouched.
+
+| File | Change |
+|---|---|
+| `src/wayland/protocols/gamma_control.rs` | New. Manager global and per-output control. One control per output (a second one gets `failed`), `gamma_size` from the CRTC's `gamma_length`, the ramp read from the fd the client passes and handed to the backend. |
+| `src/wayland/handlers/gamma_control.rs` | New. Implements the handler for `State` and delegates the two protocol objects. |
+| `src/backend/kms/mod.rs` | `gamma_table_size` / `set_output_gamma`: find the CRTC(s) showing an output (mirrors included) and program the legacy ramp with `set_gamma`, retrying on `EBUSY`. |
+| `src/wayland/handlers/output_power.rs` | Re-sends the last table when an output is powered back on, because a DPMS cycle drops the LUT. |
+
+Details worth knowing when debugging it:
+
+- The ramp goes through the legacy `SETGAMMA` ioctl, which the kernel turns into
+  an atomic commit of the CRTC's `GAMMA_LUT` property. That is why it has to use
+  the compositor's DRM master fd: a plain `open("/dev/dri/card0")` from another
+  process fails with `EPERM`, so no helper daemon can do this behind the
+  compositor's back.
+- `crtc_info().gamma_length()` is 256 on Intel (the legacy palette size) while
+  the atomic `GAMMA_LUT_SIZE` property is 1024. Clients are told 256 and the
+  driver resamples, which is what the protocol expects.
+- The last table is kept per output and re-sent on DPMS-on. A hotplug re-creates
+  the surface with an identity ramp; a client that stays connected is expected to
+  resend, as on any other compositor.
+- Destroying the control — or the client disconnecting — restores the identity
+  ramp, as the protocol requires.
 
 ## Install
 

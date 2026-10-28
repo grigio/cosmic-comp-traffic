@@ -734,6 +734,106 @@ impl KmsState {
             .copied()
     }
 
+    /// Length of the legacy gamma ramps of the CRTC driving `output`, if it has
+    /// one. This is what `wlr-gamma-control` advertises as `gamma_size`.
+    pub fn gamma_table_size(&self, output: &Output) -> Option<u32> {
+        for device in self.drm_devices.values() {
+            let fd = device.drm.device().device_fd();
+            for (crtc, surface) in &device.inner.surfaces {
+                if surface.output != *output && surface.output.mirroring().as_ref() != Some(output)
+                {
+                    continue;
+                }
+
+                // `gamma_length` is 0 for CRTCs without a legacy LUT, which is
+                // also the case the protocol reports as `failed`.
+                if let Ok(info) = fd.get_crtc(*crtc)
+                    && info.gamma_length() > 0
+                {
+                    return Some(info.gamma_length());
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Program the gamma ramps of every CRTC showing `output`, or restore the
+    /// identity ramp when `table` is `None`.
+    ///
+    /// `table` holds the red, green and blue ramps back to back, exactly as
+    /// `wlr-gamma-control` passes them.
+    pub fn set_output_gamma(&self, output: &Output, table: Option<&[u16]>) -> Result<()> {
+        let mut programmed = 0;
+
+        for device in self.drm_devices.values() {
+            let fd = device.drm.device().device_fd();
+            for (crtc, surface) in &device.inner.surfaces {
+                if surface.output != *output && surface.output.mirroring().as_ref() != Some(output)
+                {
+                    continue;
+                }
+
+                let info = fd
+                    .get_crtc(*crtc)
+                    .with_context(|| format!("failed to read CRTC {crtc:?}"))?;
+                let len = info.gamma_length() as usize;
+                if len == 0 {
+                    continue;
+                }
+
+                let identity;
+                let (red, green, blue) = match table {
+                    Some(table) if table.len() == len * 3 => {
+                        (&table[..len], &table[len..2 * len], &table[2 * len..])
+                    }
+                    Some(table) => {
+                        anyhow::bail!(
+                            "gamma table has {} entries, CRTC {crtc:?} wants {}",
+                            table.len(),
+                            len * 3,
+                        );
+                    }
+                    None => {
+                        identity = identity_gamma(len);
+                        (&identity[..], &identity[..], &identity[..])
+                    }
+                };
+
+                // The legacy ioctl turns into an atomic commit of the CRTC's
+                // GAMMA_LUT property, so it can collide with a commit already in
+                // flight from the surface thread.
+                let mut attempts = 0;
+                loop {
+                    match fd.set_gamma(*crtc, red, green, blue) {
+                        Ok(()) => break,
+                        Err(err)
+                            if err.raw_os_error()
+                                == Some(rustix::io::Errno::BUSY.raw_os_error())
+                                && attempts < 4 =>
+                        {
+                            attempts += 1;
+                            std::thread::sleep(std::time::Duration::from_millis(2));
+                        }
+                        Err(err) => {
+                            return Err(anyhow::Error::from(err)).with_context(|| {
+                                format!("failed to set the gamma table of CRTC {crtc:?}")
+                            });
+                        }
+                    }
+                }
+
+                programmed += 1;
+            }
+        }
+
+        if programmed == 0 {
+            anyhow::bail!("no CRTC is driving {output:?}");
+        }
+
+        Ok(())
+    }
+
     pub fn update_screen_filter(&mut self, screen_filter: &ScreenFilter) -> Result<()> {
         for device in self.drm_devices.values_mut() {
             for surface in device.inner.surfaces.values_mut() {
@@ -1302,4 +1402,12 @@ impl KmsGuard<'_> {
 
         Ok(())
     }
+}
+
+/// A linear ramp: `len` entries from 0 to `u16::MAX`, i.e. no colour change.
+fn identity_gamma(len: usize) -> Vec<u16> {
+    let last = len.saturating_sub(1).max(1) as u64;
+    (0..len)
+        .map(|i| (u16::MAX as u64 * i as u64 / last) as u16)
+        .collect()
 }
