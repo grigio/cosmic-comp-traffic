@@ -1,0 +1,164 @@
+diff --git a/src/input/actions.rs b/src/input/actions.rs
+index 6015ff85..b457fe20 100644
+--- a/src/input/actions.rs
++++ b/src/input/actions.rs
+@@ -27,12 +27,38 @@ use smithay::{
+ use tracing::info;
+ use tracing::{error, warn};
+ 
+-use std::{os::unix::process::CommandExt, thread};
++use std::{os::unix::process::CommandExt, sync::Mutex, thread, time::Duration, time::Instant};
+ 
+ use super::gestures;
+ 
+ const MAX_ZOOM: f64 = 256.0;
+ 
++/// How long an Alt+Tab cycle stays open: presses closer together than this walk
++/// the order captured by the first press, a later press starts a new cycle.
++const WINDOW_CYCLE_TIMEOUT: Duration = Duration::from_secs(3);
++
++/// Order of the windows of an in-progress Alt+Tab cycle, kept per seat.
++///
++/// Focusing a window raises it, so the stacking order of the workspace changes
++/// after every step; reusing the order from the first press is what makes
++/// repeated presses visit every window instead of bouncing between two.
++#[derive(Default)]
++struct WindowCycle(Mutex<Option<WindowCycleState>>);
++
++struct WindowCycleState {
++    order: Vec<KeyboardFocusTarget>,
++    index: usize,
++    last: Instant,
++}
++
++fn has_surface(targets: &[KeyboardFocusTarget], target: &KeyboardFocusTarget) -> bool {
++    target.active_window().is_some_and(|window| {
++        targets
++            .iter()
++            .any(|other| other.active_window().as_ref() == Some(&window))
++    })
++}
++
+ fn propagate_by_default(action: &shortcuts::Action) -> bool {
+     matches!(
+         action,
+@@ -1040,6 +1066,16 @@ impl State {
+                 self.common.shell.write().toggle_sticky_current(seat);
+             }
+ 
++            // Alt+Tab / Alt+Shift+Tab: cycle the focus through the windows of
++            // the active workspace in stacking order. This fork handles the
++            // switcher actions in-process instead of spawning a switcher UI.
++            Action::System(shortcuts::action::System::WindowSwitcher) => {
++                self.cycle_window_focus(seat, serial, true);
++            }
++            Action::System(shortcuts::action::System::WindowSwitcherPrevious) => {
++                self.cycle_window_focus(seat, serial, false);
++            }
++
+             // Gets the configured command for a given system action.
+             Action::System(system) => {
+                 if let Some(command) = self.common.config.system_actions.get(&system) {
+@@ -1068,6 +1104,102 @@ impl State {
+         }
+     }
+ 
++    /// Cycles the keyboard focus through the windows of the active workspace in
++    /// stacking order (windows first, then fullscreen surfaces).
++    ///
++    /// Used by `System(WindowSwitcher)` / `System(WindowSwitcherPrevious)`, i.e.
++    /// the Alt+Tab and Alt+Shift+Tab bindings, so the focus moves immediately
++    /// instead of opening a switcher UI.
++    ///
++    /// Focusing a window raises it, so the stacking order changes after every
++    /// step: the order of the first press is kept in `WindowCycle` and reused by
++    /// the presses that follow within `WINDOW_CYCLE_TIMEOUT`, otherwise the
++    /// cycle would bounce between the same two windows.
++    fn cycle_window_focus(&mut self, seat: &Seat<State>, serial: Serial, forward: bool) {
++        let output = seat.active_output();
++        let current = seat
++            .get_keyboard()
++            .and_then(|keyboard| keyboard.current_focus())
++            .and_then(|target| target.active_window());
++
++        seat.user_data()
++            .insert_if_missing_threadsafe(WindowCycle::default);
++        let cycle = seat.user_data().get::<WindowCycle>().unwrap();
++        let mut cycle = cycle.0.lock().unwrap();
++
++        let target = {
++            let mut shell = self.common.shell.write();
++            let Some(workspace) = shell.active_space_mut(&output) else {
++                return;
++            };
++
++            let mut targets: Vec<KeyboardFocusTarget> = workspace
++                .mapped()
++                .filter(|mapped| !mapped.is_minimized())
++                .map(|mapped| FocusTarget::Window(mapped.clone()).into())
++                .collect();
++            targets.extend(
++                workspace
++                    .get_fullscreen_surfaces()
++                    .map(|fullscreen| FocusTarget::Fullscreen(fullscreen.surface.clone()).into()),
++            );
++
++            // Nothing to cycle through (or only the focused window itself).
++            if targets.len() < 2 {
++                *cycle = None;
++                return;
++            }
++
++            // Continue the cycle started by an earlier press, as long as it is
++            // still recent, still points at the focused window, and every window
++            // in it is still mapped here.
++            let resume = cycle.as_ref().is_some_and(|state| {
++                state.last.elapsed() < WINDOW_CYCLE_TIMEOUT
++                    && current.as_ref()
++                        == state
++                            .order
++                            .get(state.index)
++                            .and_then(|target| target.active_window())
++                            .as_ref()
++                    && state
++                        .order
++                        .iter()
++                        .all(|target| has_surface(&targets, target))
++            });
++
++            let (order, index) = if resume {
++                let state = cycle.take().unwrap();
++                (state.order, state.index)
++            } else {
++                // Start next to the focused window; when it is not part of this
++                // workspace (e.g. a popup or layer surface has focus), start at
++                // the far end so the first step lands on the first window.
++                let index = current
++                    .and_then(|current| {
++                        targets
++                            .iter()
++                            .position(|target| target.active_window().as_ref() == Some(&current))
++                    })
++                    .unwrap_or_else(|| if forward { targets.len() - 1 } else { 0 });
++                (targets, index)
++            };
++
++            let len = order.len();
++            let step = if forward { 1 } else { len - 1 };
++            let index = (index + step) % len;
++
++            let target = order[index].clone();
++            *cycle = Some(WindowCycleState {
++                order,
++                index,
++                last: Instant::now(),
++            });
++            target
++        };
++
++        Shell::set_focus(self, Some(&target), seat, Some(serial), true);
++    }
++
+     pub fn spawn_command(&mut self, command: String) {
+         let mut shell = self.common.shell.write();
+ 

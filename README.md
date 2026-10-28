@@ -2,8 +2,9 @@
 
 Fork of [pop-os/cosmic-comp](https://github.com/pop-os/cosmic-comp) that adds
 macOS-style traffic-light window decorations and a soft focus ring, implements
-`zwlr_foreign_toplevel_manager_v1` so third-party docks and taskbars work, and
-ships a ready-to-install **Arch Linux package for every upstream release tag**.
+`zwlr_foreign_toplevel_manager_v1` so third-party docks and taskbars work, cycles
+windows on Alt+Tab without a switcher popup, and ships a ready-to-install
+**Arch Linux package for every upstream release tag**.
 
 - Releases: <https://github.com/grigio/cosmic-comp-traffic/releases>
 - Base version: upstream tag `epoch-1.10.0` and newer
@@ -16,14 +17,46 @@ ships a ready-to-install **Arch Linux package for every upstream release tag**.
 | `src/shell/element/window.rs` | `set_activate` stores the `activated` flag *before* queueing the focus event and uses `force_update()` instead of `force_redraw()`, so the traffic lights follow focus immediately. |
 | `src/backend/render/shaders/rounded_outline.frag` | Signed-distance ring with `FEATHER = 1.5` logical px of falloff on both edges instead of a hard band. |
 | `src/backend/render/mod.rs` | Focus ring element gets 2 px of extra geometry (`pad`) so the glow is not clipped. Other indicators keep `pad: 0`. |
+| `src/input/actions.rs` | `System(WindowSwitcher)` / `System(WindowSwitcherPrevious)` cycle the focus through the windows of the active workspace in stacking order instead of spawning a switcher UI — see [Alt+Tab](#alttab). |
 
-Both patches live in `patches/common/` and apply cleanly to `epoch-1.10.0` and
-`epoch-1.11.0`:
+All four patches live in `patches/common/` and apply cleanly to `epoch-1.10.0`
+and `epoch-1.11.0`:
 
 - [`0001-macos-traffic-light-decorations.patch`](patches/common/0001-macos-traffic-light-decorations.patch)
   — the traffic lights and the focus ring described above.
 - [`0002-wlr-foreign-toplevel-management.patch`](patches/common/0002-wlr-foreign-toplevel-management.patch)
   — `zwlr_foreign_toplevel_manager_v1`, described below.
+- [`0003-three-finger-workspace-swipe.patch`](patches/common/0003-three-finger-workspace-swipe.patch)
+  — three-finger touchpad swipes switch workspaces.
+- [`0004-alt-tab-window-cycle.patch`](patches/common/0004-alt-tab-window-cycle.patch)
+  — in-process Alt+Tab window cycling, described below.
+
+## Alt+Tab
+
+Upstream binds `Alt+Tab` / `Alt+Shift+Tab` (and `Super+Tab` / `Super+Shift+Tab`)
+to `System(WindowSwitcher)` / `System(WindowSwitcherPrevious)`, which only spawn
+whatever command `system_actions` maps those variants to — on a bare session
+without that file they are no-ops, and the command is an external popup.
+
+`0004` handles the two variants inside the compositor instead: every press
+activates the next window of the active workspace (previous, for the `Shift`
+bindings) in stacking order, wrapping around, with no overlay and no helper
+process. Windows on other workspaces and minimized windows are skipped, and a
+workspace with a single window does nothing.
+
+Because it consumes the `System(WindowSwitcher*)` variants, the external popup
+cannot be reached through those bindings any more. To keep it on a different
+key, bind e.g. `Super+grave` to `Spawn("cosmic-window-switcher")` (or whatever
+switcher is installed) in
+`~/.config/cosmic/com.system76.CosmicSettings.Shortcuts/v1/custom`.
+
+The cycle is immediate rather than a popup: each press moves the focus right away,
+and the order of the first press is remembered per seat for 3 seconds, so holding
+`Alt` and tapping `Tab` walks every window (floating bottom→top, then the tiling
+group, then fullscreen surfaces) and wraps around. Without that memory the cycle
+would bounce between two windows, because focusing a window raises it and thus
+changes the stacking order. A press after the 3 seconds starts a new cycle from
+whatever is focused then.
 
 ## zwlr_foreign_toplevel_manager_v1
 
