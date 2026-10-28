@@ -1,0 +1,15 @@
+diff --git a/src/input/mod.rs b/src/input/mod.rs
+index 1649cac8..f24300c0 100644
+--- a/src/input/mod.rs
++++ b/src/input/mod.rs
+@@ -1248,8 +1248,8 @@ impl State {
+                                 natural_scroll = natural;
+                             }
+                             activate_action = match gesture_state.fingers {
+-                                3 => None, // TODO: 3 finger gestures
+-                                4 => {
++                                // 3-finger swipe switches workspaces (4 falls through to None).
++                                3 => {
+                                     if self.common.config.cosmic_conf.workspaces.workspace_layout
+                                         == WorkspaceLayout::Horizontal
+                                     {
