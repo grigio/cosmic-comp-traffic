@@ -149,7 +149,7 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -S --noconfirm --needed --disable-download-timeout \
-            cargo git just lld github-cli sudo \
+            cargo git just lld github-cli sudo seatd \
             fontconfig libdisplay-info libinput libxcb libxkbcommon mesa pixman systemd-libs wayland
 
       - name: Cache cargo registry
@@ -184,10 +184,14 @@ jobs:
           cp -r patches "$build_dir/"
 
           useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
           chown -R builder:builder "$build_dir" /tmp/pkgout
+          # --syncdeps resolves whatever the PKGBUILD asks for (including soname
+          # deps such as libseat.so), so a new upstream dependency does not need a
+          # workflow change.
           su builder -s /bin/bash -c \
             "cd '$build_dir' && COSMIC_COMP_VERSION='$COSMIC_COMP_VERSION' COSMIC_COMP_PKGREL='$pkgrel' \
-             PKGDEST=/tmp/pkgout makepkg --noconfirm --force --cleanbuild"
+             PKGDEST=/tmp/pkgout makepkg --syncdeps --noconfirm --force --cleanbuild"
 
           cp /tmp/pkgout/*.pkg.tar.zst "$GITHUB_WORKSPACE/"
 
