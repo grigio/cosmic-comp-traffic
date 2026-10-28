@@ -1,0 +1,44 @@
+diff --git a/src/state.rs b/src/state.rs
+index 313a13ad..64494124 100644
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -1364,6 +1364,13 @@ impl Common {
+ 
+         let shell = self.shell.read();
+ 
++        // A disabled output loses its workspace set, but its surface thread may
++        // still have a `SendFrames` command queued. There is nothing left to
++        // send frames to, and unwrapping here would abort the whole compositor.
++        let Some(set) = shell.workspaces.sets.get(output) else {
++            return;
++        };
++
+         if let Some(session_lock) = shell.session_lock.as_ref()
+             && let Some(lock_surface) = session_lock.surfaces.get(output)
+         {
+@@ -1407,19 +1414,12 @@ impl Common {
+             }
+         }
+ 
+-        shell
+-            .workspaces
+-            .sets
+-            .get(output)
+-            .unwrap()
+-            .sticky_layer
+-            .mapped()
+-            .for_each(|mapped| {
+-                for (window, _) in mapped.windows() {
+-                    let throttle = throttle(&window, window.x11_surface().is_some());
+-                    window.send_frame(output, time, throttle, should_send);
+-                }
+-            });
++        set.sticky_layer.mapped().for_each(|mapped| {
++            for (window, _) in mapped.windows() {
++                let throttle = throttle(&window, window.x11_surface().is_some());
++                window.send_frame(output, time, throttle, should_send);
++            }
++        });
+ 
+         if let Some(active) = shell.active_space(output) {
+             if let Some(fs) = active.get_fullscreen(shell.seats.last_active()) {
