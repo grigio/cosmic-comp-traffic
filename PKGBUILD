@@ -45,7 +45,11 @@ makedepends=(
 provides=(cosmic-comp)
 conflicts=(cosmic-comp)
 replaces=(cosmic-comp)
-source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git#tag=epoch-${pkgver}")
+# VCS source without a `#tag=` fragment: makepkg would then demand a checksum,
+# and there is one checksum per upstream tag. The exact tag is checked out in
+# prepare() instead, which keeps the PKGBUILD usable for any $pkgver.
+source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git")
+sha256sums=('SKIP')
 
 _patch_dirs() {
   printf '%s\n' "$startdir/patches/common"
@@ -56,6 +60,9 @@ _patch_dirs() {
 
 prepare() {
   cd cosmic-comp
+
+  git fetch --quiet --tags origin
+  git checkout --quiet --detach "epoch-${pkgver}"
 
   cargo fetch --locked
 
