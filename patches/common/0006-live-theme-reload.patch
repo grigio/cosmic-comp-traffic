@@ -1,0 +1,17 @@
+diff --git a/src/theme.rs b/src/theme.rs
+index d89d89f5..d29885ae 100644
+--- a/src/theme.rs
++++ b/src/theme.rs
+@@ -30,7 +30,11 @@ pub fn watch_theme(handle: LoopHandle<'_, State>) -> Result<(), cosmic_config::E
+         let new_theme = cosmic::theme::system_preference();
+         let theme = &mut state.common.theme;
+ 
+-        if theme.theme_type != new_theme.theme_type {
++        // Upstream only reloads when the dark/light preference flips, so accent
++        // colors, the `frosted*` flags and the window hint stayed stale until the
++        // compositor was restarted. Compare the whole theme so live edits in the
++        // cosmic theme config are picked up.
++        if theme.theme_type != new_theme.theme_type || theme.cosmic() != new_theme.cosmic() {
+             *theme = new_theme;
+             let mut workspace_guard = state.common.workspace_state.update();
+             state.common.shell.write().set_theme(

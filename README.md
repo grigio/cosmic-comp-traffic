@@ -19,8 +19,9 @@ windows on Alt+Tab without a switcher popup, and ships a ready-to-install
 | `src/backend/render/shaders/rounded_outline.frag` | Signed-distance ring with `FEATHER = 1.5` logical px of falloff on both edges instead of a hard band. |
 | `src/backend/render/mod.rs` | Focus ring element gets 2 px of extra geometry (`pad`) so the glow is not clipped. Other indicators keep `pad: 0`. |
 | `src/input/actions.rs` | `System(WindowSwitcher)` / `System(WindowSwitcherPrevious)` cycle the focus through the windows of the active workspace in stacking order instead of spawning a switcher UI — see [Alt+Tab](#alttab). |
+| `src/theme.rs` | The theme watcher reloads on any theme change instead of only on a dark/light flip, so `window_hint`, `active_hint` and the `frosted*` flags apply live — see [Live theme reload](#live-theme-reload). |
 
-All five patches live in `patches/common/` and apply cleanly to `epoch-1.10.0`
+All six patches live in `patches/common/` and apply cleanly to `epoch-1.10.0`
 and `epoch-1.11.0`:
 
 - [`0001-macos-traffic-light-decorations.patch`](patches/common/0001-macos-traffic-light-decorations.patch)
@@ -33,6 +34,27 @@ and `epoch-1.11.0`:
   — in-process Alt+Tab window cycling, described below.
 - [`0005-wlr-gamma-control.patch`](patches/common/0005-wlr-gamma-control.patch)
   — `wlr-gamma-control-unstable-v1`, described below.
+- [`0006-live-theme-reload.patch`](patches/common/0006-live-theme-reload.patch)
+  — theme edits apply without a restart, described below.
+
+## Live theme reload
+
+`watch_theme` reloaded the COSMIC theme only when the dark/light preference
+flipped, so every other value in the theme config stayed stale until the
+compositor was restarted: accent colours, the `frosted*` flags, and
+`window_hint` (the focus ring colour, `active_window_hint()`).
+
+`0006` compares the whole theme instead of just `theme_type`, so editing
+`~/.config/cosmic/com.system76.CosmicTheme.<Mode>/v2/*` — for instance
+`window_hint` to recolour the focus ring, or `active_hint` to make it thinner —
+shows up on the next frame. Pings arrive from the existing cosmic-config
+watchers on both the mode config and the dark/light theme configs, so no extra
+watcher is needed.
+
+Note that `window_hint` is an `Option<Srgb>`, i.e. RON
+`Some((red: 0.545098, green: 0.360784, blue: 0.964706))` for `#8B5CF6`; a hex
+string (or `Some(Hex("…"))`) makes `Theme::get_entry` fail and the compositor
+silently falls back to the default theme.
 
 ## Alt+Tab
 
