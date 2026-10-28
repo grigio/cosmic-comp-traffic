@@ -14,3 +14,12 @@ vendor.tar
 .vscode
 *.log
 /result
+
+# makepkg artifacts (scripts/build-local.sh builds in a scratch dir, but just in
+# case someone runs makepkg in place)
+pkg/
+out/
+*.pkg.tar.zst
+*.pkg.tar.zst.sha256
+*.pkg.tar.xz
+*.pkg.tar.zst.sig

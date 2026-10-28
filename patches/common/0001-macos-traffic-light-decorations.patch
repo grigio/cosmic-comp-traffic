@@ -1,0 +1,517 @@
+diff --git a/src/backend/render/mod.rs b/src/backend/render/mod.rs
+index 9ad6158..f1d3f66 100644
+--- a/src/backend/render/mod.rs
++++ b/src/backend/render/mod.rs
+@@ -188,6 +188,7 @@ impl From<Id> for Key {
+ #[derive(PartialEq)]
+ struct IndicatorSettings {
+     thickness: u8,
++    pad: u8,
+     outer_radius: [u8; 4],
+     alpha: f32,
+     color: [f32; 3],
+@@ -216,16 +217,21 @@ impl IndicatorShader {
+         scale: f64,
+         active_window_hint: [f32; 3],
+     ) -> PixelShaderElement {
+-        let t = thickness as i32;
++        // The ring is feathered (see FEATHER in rounded_outline.frag), so the
++        // element needs extra room outside the ring's outer edge or the glow
++        // gets clipped by the element bounds.
++        const PAD: u8 = 2;
++        let t = thickness as i32 + PAD as i32;
+         element_geo.loc -= (t, t).into();
+         element_geo.size += (t * 2, t * 2).into();
+-        let outer_radius = inner_radius.map(|r| r + thickness);
++        let outer_radius = inner_radius.map(|r| r + thickness + PAD);
+ 
+-        IndicatorShader::element(
++        IndicatorShader::element_with_pad(
+             renderer,
+             key,
+             element_geo,
+             thickness,
++            PAD,
+             outer_radius,
+             alpha,
+             scale,
+@@ -242,9 +248,35 @@ impl IndicatorShader {
+         alpha: f32,
+         scale: f64,
+         color: [f32; 3],
++    ) -> PixelShaderElement {
++        IndicatorShader::element_with_pad(
++            renderer,
++            key,
++            geo,
++            thickness,
++            0,
++            outer_radius,
++            alpha,
++            scale,
++            color,
++        )
++    }
++
++    #[allow(clippy::too_many_arguments)]
++    fn element_with_pad<R: AsGlowRenderer>(
++        renderer: &R,
++        key: impl Into<Key>,
++        geo: Rectangle<i32, Local>,
++        thickness: u8,
++        pad: u8,
++        outer_radius: [u8; 4],
++        alpha: f32,
++        scale: f64,
++        color: [f32; 3],
+     ) -> PixelShaderElement {
+         let settings = IndicatorSettings {
+             thickness,
++            pad,
+             outer_radius,
+             alpha,
+             scale,
+diff --git a/src/backend/render/shaders/rounded_outline.frag b/src/backend/render/shaders/rounded_outline.frag
+index d3266e6..0c4da69 100644
+--- a/src/backend/render/shaders/rounded_outline.frag
++++ b/src/backend/render/shaders/rounded_outline.frag
+@@ -10,50 +10,55 @@ uniform vec3 color;
+ uniform float thickness;
+ uniform vec4 radius;
+ uniform float scale;
++// How far the element extends past the ring's outer edge. The focus ring is
++// padded by FEATHER so the soft falloff is not clipped at the element bounds;
++// plain borders (group/pill outlines) pass 0 and behave as before.
++uniform float pad;
+ 
+-float rounding_alpha(vec2 coords, vec2 size, vec4 radius) {
+-    vec2 center;
+-    float r;
++// Soft-edge width in logical pixels. The stock shader cut the ring off with a
++// hard step (only the rounded corners were antialiased); "mac-soft" fades the
++// band out over FEATHER px on both sides so the focus ring reads as a glow
++// instead of a 1px hard line. Set to 0.0 for the old hard edge.
++const float FEATHER = 1.5;
+ 
+-    if (coords.x < radius.x && coords.y < radius.x) {
+-        r = radius.x;
+-        center = vec2(r, r);
+-    } else if (size.x - radius.y < coords.x && coords.y < radius.y) {
+-        r = radius.y;
+-        center = vec2(size.x - r, r);
+-    } else if (size.x - radius.z < coords.x && size.y - radius.z < coords.y) {
+-        r = radius.z;
+-        center = vec2(size.x - r, size.y - r);
+-    } else if (coords.x < radius.w && size.y - radius.w < coords.y) {
+-        r = radius.w;
+-        center = vec2(r, size.y - r);
+-    } else {
+-        return 1.0;
++// radius = (top-left, top-right, bottom-right, bottom-left)
++float corner_radius(vec2 p, vec4 r) {
++    if (p.x < 0.0) {
++        return p.y < 0.0 ? r.x : r.w;
+     }
++    return p.y < 0.0 ? r.y : r.z;
++}
+ 
+-    float dist = distance(coords, center);
+-    float half_px = 0.5 / scale;
+-    return 1.0 - smoothstep(r - half_px, r + half_px, dist);
++// Signed distance to a rounded rectangle centred on the origin (negative
++// inside), with per-corner radii.
++float rounded_rect_distance(vec2 p, vec2 half_size, vec4 r) {
++    float cr = min(corner_radius(p, r), min(half_size.x, half_size.y));
++    vec2 q = abs(p) - half_size + cr;
++    return min(max(q.x, q.y), 0.0) + length(max(q, vec2(0.0))) - cr;
+ }
+ 
+ void main() {
+     vec2 location = v_coords * size;
++    vec2 half_size = size * 0.5;
+ 
+-    float outer_alpha = rounding_alpha(v_coords * size, size, radius);
+-    float inner_alpha = 1.0;
++    // The ring's own rectangle, i.e. the element shrunk back by `pad`.
++    vec2 ring_half_size = max(half_size - vec2(pad), vec2(0.0));
++    vec4 ring_radius = max(radius - vec4(pad), vec4(0.0));
+ 
+-    if (thickness > 0.0) {
+-        location -= vec2(thickness);
+-        vec2 inner_size = size - vec2(thickness * 2.0);
+-        if (0.0 <= location.x && location.x <= inner_size.x
+-                && 0.0 <= location.y && location.y <= inner_size.y)
+-        {
+-            vec4 inner_radius = radius - vec4(thickness);
+-            inner_alpha = 1.0 - rounding_alpha(location, inner_size, inner_radius);
+-        }
+-    }
++    // 0.0 on the ring's outer boundary, negative inside the window.
++    float d = rounded_rect_distance(location - half_size, ring_half_size, ring_radius);
++
++    // The ring occupies the `thickness` px just inside the outer boundary.
++    // Both edges get at least the physical pixel grid as antialiasing, plus
++    // FEATHER of falloff. Keeping the peak centred on the band means a 1px
++    // configured hint still leaves a visible, soft line.
++    float half_band = max(thickness * 0.5, 0.5 / scale);
++    float falloff = max(FEATHER, 0.5 / scale);
++    float ring_alpha = 1.0 - smoothstep(half_band, half_band + falloff, abs(d + half_band));
+ 
+-    vec4 mix_color = mix(vec4(0.0, 0.0, 0.0, 0.0), vec4(color, alpha), outer_alpha * inner_alpha);
++    // Pre-multiplied, same as the stock shader: the `color` uniform already
++    // has `alpha` folded in by the caller.
++    vec4 mix_color = mix(vec4(0.0, 0.0, 0.0, 0.0), vec4(color, alpha), ring_alpha);
+ 
+     #if defined(DEBUG_FLAGS)
+     if (tint == 1.0)
+diff --git a/src/shell/element/window.rs b/src/shell/element/window.rs
+index fa4a187..5fa446e 100644
+--- a/src/shell/element/window.rs
++++ b/src/shell/element/window.rs
+@@ -16,7 +16,16 @@ use crate::{
+     },
+ };
+ use calloop::LoopHandle;
+-use cosmic::iced::{Color, Task};
++use cosmic::{
++    iced::{
++        Alignment, Color, Length, Task,
++        core::text::{Ellipsize, EllipsizeHeightLimit, Wrapping},
++        mouse,
++        widget::canvas,
++    },
++    theme,
++    widget::{self, text},
++};
+ use cosmic_comp_config::AppearanceConfig;
+ use smithay::{
+     backend::{
+@@ -75,7 +84,8 @@ use wayland_backend::server::ObjectId;
+ 
+ use super::CosmicSurface;
+ 
+-pub const SSD_HEIGHT: i32 = 36;
++// Must match the height of the decoration built in DefaultDecorations::view.
++pub const SSD_HEIGHT: i32 = 28;
+ pub const RESIZE_BORDER: i32 = 10;
+ 
+ #[derive(Clone, PartialEq, Eq, Hash)]
+@@ -525,10 +535,14 @@ impl CosmicWindow {
+             location
+         };
+ 
+-        let (mut geo, bg_divider) = self.0.with_program(|p| {
++        let (mut geo, bg_divider, ring_drawn) = self.0.with_program(|p| {
++            let theme = p.theme.lock().unwrap();
+             (
+                 SpaceElement::geometry(&p.window).to_f64(),
+-                p.theme.lock().unwrap().cosmic().bg_divider(),
++                theme.cosmic().bg_divider(),
++                // The focused window is outlined by the focus ring instead, so
++                // skip the divider border to avoid a second, grey outline.
++                p.activated.load(Ordering::SeqCst) && theme.cosmic().active_hint > 0,
+             )
+         });
+         geo.loc += location.to_f64().to_logical(scale);
+@@ -539,7 +553,7 @@ impl CosmicWindow {
+             geo.size = geo.size.clamp(Size::default(), max_size.to_f64());
+         }
+ 
+-        if (has_ssd || clip) && !is_maximized {
++        if (has_ssd || clip) && !is_maximized && !ring_drawn {
+             let window_key =
+                 CosmicMappedKey(CosmicMappedKeyInner::Window(Arc::downgrade(&self.0.0)));
+ 
+@@ -865,29 +879,260 @@ impl Program for CosmicWindowInternal {
+ #[derive(Debug)]
+ pub struct DefaultDecorations;
+ 
++// macOS-style traffic lights, matching ~/Code/labwc-macos-dark-theme:
++// close=red, minimize=green, maximize=yellow, right-aligned, glyph only on
++// hover. libcosmic's header_bar() can only tint all three buttons with one
++// colour, so the controls are built here instead.
++const LIGHT_CLOSE: Color = Color::from_rgb(1.0, 0.3725, 0.3412); // #FF5F57
++const LIGHT_MINIMIZE: Color = Color::from_rgb(0.1569, 0.7843, 0.2510); // #28C840
++const LIGHT_MAXIMIZE: Color = Color::from_rgb(0.9961, 0.7373, 0.1804); // #FEBC2E
++const LIGHT_INACTIVE: Color = Color::from_rgb(0.3882, 0.3882, 0.4); // #636366
++
++/// Diameter of a traffic light, matching macOS (and the 10px circles in the
++/// labwc theme this copies).
++const LIGHT_SIZE: f32 = 12.0;
++/// Gap between the lights: 12px circles with 8px gaps gives the 20px centres
++/// macOS uses.
++const LIGHT_SPACING: u16 = 8;
++/// Titlebar content height. Kept in sync with SSD_HEIGHT, which cosmic-comp
++/// uses for hit-testing and window geometry.
++const HEADER_HEIGHT: f32 = SSD_HEIGHT as f32;
++
++type IcedPoint = cosmic::iced::Point;
++type IcedRectangle = cosmic::iced::Rectangle;
++
++fn light_color(base: Color, factor: f32) -> Color {
++    Color {
++        r: (base.r * factor).min(1.0),
++        g: (base.g * factor).min(1.0),
++        b: (base.b * factor).min(1.0),
++        a: base.a,
++    }
++}
++
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum LightGlyph {
++    Minimize,
++    Maximize,
++    Close,
++}
++
++/// One macOS-style traffic light, drawn on a canvas so that the glyph can be
++/// shown only while the pointer is over it (iced styles cannot switch widget
++/// content, and the theme's icon tint applies to all header buttons at once).
++struct TrafficLight {
++    color: Color,
++    glyph: LightGlyph,
++    focused: bool,
++}
++
++impl canvas::Program<Message, theme::Theme, cosmic::Renderer> for TrafficLight {
++    type State = ();
++
++    fn draw(
++        &self,
++        _state: &(),
++        renderer: &cosmic::Renderer,
++        _theme: &theme::Theme,
++        bounds: IcedRectangle,
++        cursor: mouse::Cursor,
++    ) -> Vec<canvas::Geometry> {
++        let hovered = cursor.is_over(bounds);
++        let mut frame = canvas::Frame::new(renderer, bounds.size());
++        let center = IcedPoint::new(bounds.width / 2.0, bounds.height / 2.0);
++        let radius = bounds.width.min(bounds.height) / 2.0;
++
++        // Unfocused windows dim to grey, like macOS. Hovering lightens the
++        // circle slightly instead of drawing a halo.
++        let base = if self.focused {
++            self.color
++        } else {
++            LIGHT_INACTIVE
++        };
++        let fill = if hovered {
++            light_color(base, if self.focused { 1.12 } else { 1.25 })
++        } else {
++            base
++        };
++        frame.fill(&canvas::Path::circle(center, radius), fill);
++
++        if hovered {
++            let glyph = Color::from_rgba(0.0, 0.0, 0.0, if self.focused { 0.55 } else { 0.35 });
++            let stroke = canvas::Stroke::default()
++                .with_color(glyph)
++                .with_width(1.2)
++                .with_line_cap(canvas::LineCap::Round);
++
++            match self.glyph {
++                LightGlyph::Minimize => {
++                    let arms = radius * 0.45;
++                    frame.stroke(
++                        &canvas::Path::line(
++                            IcedPoint::new(center.x - arms, center.y),
++                            IcedPoint::new(center.x + arms, center.y),
++                        ),
++                        stroke,
++                    );
++                }
++                LightGlyph::Close => {
++                    let arms = radius * 0.35;
++                    frame.stroke(
++                        &canvas::Path::line(
++                            IcedPoint::new(center.x - arms, center.y - arms),
++                            IcedPoint::new(center.x + arms, center.y + arms),
++                        ),
++                        stroke,
++                    );
++                    frame.stroke(
++                        &canvas::Path::line(
++                            IcedPoint::new(center.x - arms, center.y + arms),
++                            IcedPoint::new(center.x + arms, center.y - arms),
++                        ),
++                        stroke,
++                    );
++                }
++                LightGlyph::Maximize => {
++                    // macOS uses two opposing arrow heads for "zoom".
++                    let out = radius * 0.55;
++                    let arm = radius * 0.32;
++                    let heads = [
++                        [
++                            IcedPoint::new(center.x + out - arm, center.y - out),
++                            IcedPoint::new(center.x + out, center.y - out),
++                            IcedPoint::new(center.x + out, center.y - out + arm),
++                        ],
++                        [
++                            IcedPoint::new(center.x - out + arm, center.y + out),
++                            IcedPoint::new(center.x - out, center.y + out),
++                            IcedPoint::new(center.x - out, center.y + out - arm),
++                        ],
++                    ];
++                    for head in heads {
++                        frame.fill(
++                            &canvas::Path::new(|builder| {
++                                builder.move_to(head[0]);
++                                builder.line_to(head[1]);
++                                builder.line_to(head[2]);
++                                builder.close();
++                            }),
++                            glyph,
++                        );
++                    }
++                }
++            }
++        }
++
++        vec![frame.into_geometry()]
++    }
++
++    fn mouse_interaction(
++        &self,
++        _state: &(),
++        bounds: IcedRectangle,
++        cursor: mouse::Cursor,
++    ) -> mouse::Interaction {
++        if cursor.is_over(bounds) {
++            mouse::Interaction::Pointer
++        } else {
++            mouse::Interaction::None
++        }
++    }
++}
++
++fn traffic_light(
++    glyph: LightGlyph,
++    color: Color,
++    focused: bool,
++    on_press: Option<Message>,
++) -> cosmic::Element<'static, Message> {
++    let light = widget::canvas(TrafficLight {
++        color,
++        glyph,
++        focused,
++    })
++    .width(Length::Fixed(LIGHT_SIZE))
++    .height(Length::Fixed(LIGHT_SIZE));
++
++    let mut light = widget::mouse_area(light);
++    if let Some(message) = on_press {
++        light = light.on_press(message);
++    }
++
++    light.into()
++}
++
+ impl Decorations<CosmicWindowInternal, Message> for DefaultDecorations {
+     fn view(&self, win: &CosmicWindowInternal) -> cosmic::Element<'_, Message> {
+         let sharp_corners = win.window.is_maximized(false)
+             || (win.is_tiled() && !win.appearance_conf.lock().unwrap().clip_tiled_windows);
++        // Use the compositor's own activation flag. `window.is_activated(false)`
++        // reads the client-acknowledged xdg_toplevel state, which only updates
++        // after the client commits, so a freshly (de)focused window kept the
++        // lights of its previous state until the next event rebuilt the view.
++        let focused = win.activated.load(Ordering::SeqCst);
++        let title = win.last_title.lock().unwrap().clone();
+ 
+-        let mut header = cosmic::widget::header_bar()
+-            .title(win.last_title.lock().unwrap().clone())
+-            .on_drag(Message::DragStart)
+-            .on_close(Message::Close)
+-            .focused(win.window.is_activated(false))
+-            .on_double_click(Message::Maximize)
+-            .on_right_click(Message::Menu)
+-            .is_ssd(true)
+-            .sharp_corners(sharp_corners);
++        let mut lights: Vec<cosmic::Element<'_, Message>> = Vec::with_capacity(3);
+ 
+         if cosmic::config::show_minimize() {
+-            header = header.on_minimize(Message::Minimize)
++            lights.push(traffic_light(
++                LightGlyph::Minimize,
++                LIGHT_MINIMIZE,
++                focused,
++                Some(Message::Minimize),
++            ));
+         }
+         if cosmic::config::show_maximize() {
+-            header = header.on_maximize(Message::Maximize)
++            lights.push(traffic_light(
++                LightGlyph::Maximize,
++                LIGHT_MAXIMIZE,
++                focused,
++                Some(Message::Maximize),
++            ));
+         }
++        lights.push(traffic_light(
++            LightGlyph::Close,
++            LIGHT_CLOSE,
++            focused,
++            Some(Message::Close),
++        ));
++
++        let header = widget::container(
++            widget::row::with_capacity(2)
++                .push(
++                    widget::container(
++                        text::heading(title)
++                            .wrapping(Wrapping::None)
++                            .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
++                    )
++                    .width(Length::Fill)
++                    .align_x(Alignment::Center)
++                    .align_y(Alignment::Center),
++                )
++                .push(
++                    widget::row::with_children(lights)
++                        .spacing(LIGHT_SPACING)
++                        .align_y(Alignment::Center),
++                )
++                .align_y(Alignment::Center)
++                .width(Length::Fill),
++        )
++        .class(theme::Container::HeaderBar {
++            focused,
++            sharp_corners,
++            transparent: false,
++        })
++        .width(Length::Fill)
++        .height(Length::Fixed(HEADER_HEIGHT))
++        .padding([2, 8, 2, 8])
++        .align_x(Alignment::Start)
++        .align_y(Alignment::Center);
+ 
+-        header.into()
++        widget::mouse_area(header)
++            .on_drag(Message::DragStart)
++            .on_double_press(Message::Maximize)
++            .on_right_press(Message::Menu)
++            .into()
+     }
+ }
+ 
+@@ -923,12 +1168,17 @@ impl SpaceElement for CosmicWindow {
+             .0
+             .with_program(|p| p.activated.load(Ordering::SeqCst) != activated)
+         {
+-            SpaceElement::set_activate(&self.0, activated);
+-            self.0.force_redraw();
++            // Store the flag before rebuilding the view: `view()` reads it to
++            // colour the traffic lights, so it has to be current by then.
+             self.0.with_program(|p| {
+                 p.activated.store(activated, Ordering::SeqCst);
+                 SpaceElement::set_activate(&p.window, activated);
+             });
++            SpaceElement::set_activate(&self.0, activated);
++            // The decoration is an iced view with the activation state baked
++            // in, so a plain redraw would keep the old traffic lights.
++            // force_update() re-runs view().
++            self.0.force_update();
+         }
+     }
+     #[profiling::function]
