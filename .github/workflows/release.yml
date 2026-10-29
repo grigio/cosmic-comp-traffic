@@ -258,7 +258,7 @@ jobs:
           ### Install
 
           \`\`\`sh
-          gh release download $TAG -R $GITHUB_REPOSITORY -p '*.pkg.tar.zst*' -D /tmp/cosmic-comp-traffic
+          gh release download $TAG -R $GITHUB_REPOSITORY -p 'cosmic-comp-traffic-[0-9]*.pkg.tar.zst*' -D /tmp/cosmic-comp-traffic
           cd /tmp/cosmic-comp-traffic && sha256sum -c ./*.pkg.tar.zst.sha256
           sudo pacman -U ./*.pkg.tar.zst
           \`\`\`
@@ -284,3 +284,51 @@ jobs:
               --notes "$notes" \
               --verify-tag
           fi
+
+      - name: Prune older pkgrel assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ matrix.tag }}
+          VERSION: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          # Same derivation as the build step, so "older" means strictly below
+          # the pkgrel this run just uploaded.
+          pkgrel=$(git rev-list --count HEAD -- PKGBUILD patches)
+          (( pkgrel >= 1 )) || pkgrel=1
+
+          # Rebuilding a tag used to leave every previous pkgrel behind, so
+          # `gh release download -p '*.pkg.tar.zst*'` fetched several builds and
+          # `sudo pacman -U ./*` picked whichever the shell globbed last.
+          # Keep only this pkgrel: main, debug and their sha256 files.
+          stale=$(
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --json assets --jq '.assets[].name' |
+              PKGREL="$pkgrel" VERSION="$VERSION" python3 -c '
+          import os, re, sys
+
+          pattern = re.compile(
+              r"^(cosmic-comp-traffic(-debug)?)-"
+              + re.escape(os.environ["VERSION"])
+              + r"-(\d+)-x86_64\.pkg\.tar\.zst(\.sha256)?$"
+          )
+          keep = int(os.environ["PKGREL"])
+          for name in sys.stdin.read().split():
+              match = pattern.match(name)
+              if match and int(match.group(3)) < keep:
+                  print(name)
+          '
+          )
+
+          if [ -z "$stale" ]; then
+            echo "no stale assets for $TAG-$pkgrel"
+            exit 0
+          fi
+          while IFS= read -r asset; do
+            [ -n "$asset" ] || continue
+            echo "deleting $asset (older pkgrel than $pkgrel)"
+            gh release delete-asset "$TAG" "$asset" --yes --repo "$GITHUB_REPOSITORY"
+          done <<<"$stale"

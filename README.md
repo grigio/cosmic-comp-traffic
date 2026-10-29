@@ -148,7 +148,7 @@ Or by hand:
 
 ```sh
 gh release download epoch-1.11.0 -R grigio/cosmic-comp-traffic \
-   -p '*.pkg.tar.zst*' -D /tmp/cct
+   -p 'cosmic-comp-traffic-[0-9]*.pkg.tar.zst*' -D /tmp/cct
 cd /tmp/cct && sha256sum -c ./*.pkg.tar.zst.sha256
 sudo pacman -U ./*.pkg.tar.zst
 ```
@@ -177,13 +177,20 @@ sudo pacman -S cosmic-comp
 3. **publish** — mirrors the upstream tag into this fork (so the release points
    at the upstream commit) and attaches the package plus its `.sha256` to a
    release named after the tag.
+4. **prune** — deletes the packages of older `pkgrel`s from the same release,
+   including their `.sha256` and `-debug` files, so a rebuilt tag carries
+   exactly one build.
 
 If a patch stops applying to a new upstream tag, the build fails and the release
 is not created — the next scheduled run retries it, so a broken patch is visible
 instead of silently shipping an unpatched compositor.
 
 `pkgrel` is the number of commits that touched `PKGBUILD` or `patches/`, so any
-patch change automatically produces a version pacman considers an upgrade.
+patch change automatically produces a version pacman considers an upgrade. A
+rebuild only keeps that newest `pkgrel`: older assets are pruned from the
+release, because `gh release download -p '*.pkg.tar.zst*'` would otherwise fetch
+several builds and `sudo pacman -U ./*` would install whichever one the shell
+globs last.
 
 ### Triggers
 
