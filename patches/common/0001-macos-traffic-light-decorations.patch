@@ -1,5 +1,5 @@
 diff --git a/src/backend/render/mod.rs b/src/backend/render/mod.rs
-index 9ad61588..da9b9d3e 100644
+index 9ad61588..ed00fa68 100644
 --- a/src/backend/render/mod.rs
 +++ b/src/backend/render/mod.rs
 @@ -188,6 +188,7 @@ impl From<Id> for Key {
@@ -83,6 +83,17 @@ index 9ad61588..da9b9d3e 100644
                      Uniform::new(
                          "radius",
                          [
+@@ -405,6 +442,10 @@ pub fn init_shaders(renderer: &mut GlesRenderer) -> Result<(), GlesError> {
+         &[
+             UniformName::new("color", UniformType::_3f),
+             UniformName::new("thickness", UniformType::_1f),
++            // Must be listed here as well as in the shader source: the glow is
++            // drawn through this program, and a uniform that is set but not
++            // declared at compile time fails every frame with UnknownUniform.
++            UniformName::new("pad", UniformType::_1f),
+             UniformName::new("scale", UniformType::_1f),
+             UniformName::new("radius", UniformType::_4f),
+         ],
 diff --git a/src/backend/render/shaders/rounded_outline.frag b/src/backend/render/shaders/rounded_outline.frag
 index d3266e60..154f712f 100644
 --- a/src/backend/render/shaders/rounded_outline.frag
