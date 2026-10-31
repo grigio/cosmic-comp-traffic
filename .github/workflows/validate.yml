@@ -1,0 +1,53 @@
+name: Validate patches
+
+# Fast checks that do not build the package: keep patches/series in sync with
+# patches/common/, and make sure every patch still applies to every supported
+# upstream tag. The release workflow is the compile gate.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - PKGBUILD
+      - 'patches/**'
+      - 'scripts/**'
+      - '.github/workflows/validate.yml'
+      - '.github/workflows/release.yml'
+  pull_request:
+    paths:
+      - PKGBUILD
+      - 'patches/**'
+      - 'scripts/**'
+      - '.github/workflows/validate.yml'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patches:
+    name: Patch series
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tags are needed to check every supported upstream release.
+          fetch-depth: 0
+
+      - name: Check shell scripts
+        run: |
+          set -euo pipefail
+          bash -n scripts/*.sh
+          if ! command -v shellcheck >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+          shellcheck scripts/*.sh
+
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+
+      - name: Validate patch series and application
+        run: ./scripts/check-patches.sh --fmt

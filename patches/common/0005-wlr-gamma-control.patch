@@ -121,6 +121,18 @@ index 4dcffc75..80417d47 100644
 +        .map(|i| (u16::MAX as u64 * i as u64 / last) as u16)
 +        .collect()
 +}
+diff --git a/src/shell/mod.rs b/src/shell/mod.rs
+index 86c3c201..87b7a889 100644
+--- a/src/shell/mod.rs
++++ b/src/shell/mod.rs
+@@ -1648,6 +1648,7 @@ impl Common {
+             .cloned()
+             .collect::<Vec<_>>();
+         self.wlr_foreign_toplevel_state.refresh(&toplevels);
++        self.gamma_control_state.cleanup();
+         self.refresh_idle_inhibit();
+         if let Some(mut a11y_keyboard_monitor) = self.dbus_state.a11y_keyboard_monitor() {
+             a11y_keyboard_monitor.refresh();
 diff --git a/src/state.rs b/src/state.rs
 index bde1a5d1..313a13ad 100644
 --- a/src/state.rs
@@ -257,10 +269,10 @@ index 333aacc6..44cde94a 100644
  
 diff --git a/src/wayland/protocols/gamma_control.rs b/src/wayland/protocols/gamma_control.rs
 new file mode 100644
-index 00000000..9815828d
+index 00000000..e3a947bd
 --- /dev/null
 +++ b/src/wayland/protocols/gamma_control.rs
-@@ -0,0 +1,283 @@
+@@ -0,0 +1,336 @@
 +// SPDX-License-Identifier: GPL-3.0-only
 +
 +use smithay::{
@@ -276,7 +288,12 @@ index 00000000..9815828d
 +        },
 +    },
 +};
-+use std::{collections::HashSet, fs::File, io::Read, mem, os::fd::OwnedFd};
++use std::{
++    collections::HashSet,
++    fs::File,
++    io, mem,
++    os::{fd::OwnedFd, unix::fs::FileExt},
++};
 +use tracing::warn;
 +use wayland_backend::server::ClientId;
 +
@@ -304,21 +321,24 @@ index 00000000..9815828d
 +    controls: HashSet<ZwlrGammaControlV1>,
 +    /// Last table per output. The hardware LUT is part of the CRTC state, so it
 +    /// can be dropped by a modeset, DPMS off/on or a hotplug re-creation; this
-+    /// is what `reapply` puts back.
-+    tables: Vec<(Output, Vec<u16>)>,
++    /// is what `reapply` puts back. The output is weak so a removed output is
++    /// not kept alive by its gamma table.
++    tables: Vec<(WeakOutput, Vec<u16>)>,
 +}
 +
 +impl GammaControlState {
 +    fn store_table(&mut self, output: Output, table: Vec<u16>) {
-+        match self.tables.iter_mut().find(|(known, _)| *known == output) {
++        let weak = output.downgrade();
++        match self.tables.iter_mut().find(|(known, _)| *known == weak) {
 +            Some((_, known_table)) => *known_table = table,
-+            None => self.tables.push((output, table)),
++            None => self.tables.push((weak, table)),
 +        }
 +    }
 +
 +    fn forget_table(&mut self, output: &Output) -> bool {
++        let weak = output.downgrade();
 +        let before = self.tables.len();
-+        self.tables.retain(|(known, _)| known != output);
++        self.tables.retain(|(known, _)| *known != weak);
 +        before != self.tables.len()
 +    }
 +
@@ -345,12 +365,20 @@ index 00000000..9815828d
 +        self.global.clone()
 +    }
 +
++    /// Drop tables for outputs that no longer exist. Without this the stored
++    /// `Output` handle would keep a removed output alive indefinitely.
++    pub fn cleanup(&mut self) {
++        self.tables.retain(|(output, _)| output.is_alive());
++    }
++
 +    /// Re-send every stored table to the hardware. Call after anything that can
 +    /// reset a CRTC's gamma LUT (DPMS on, output re-creation).
 +    pub fn reapply<D: GammaControlHandler>(state: &mut D) {
 +        let tables = mem::take(&mut state.gamma_control_state().tables);
 +        for (output, table) in &tables {
-+            state.set_output_gamma(output, Some(table.clone()));
++            if let Some(output) = output.upgrade() {
++                state.set_output_gamma(&output, Some(table.clone()));
++            }
 +        }
 +        state.gamma_control_state().tables = tables;
 +    }
@@ -363,6 +391,24 @@ index 00000000..9815828d
 +#[derive(Debug)]
 +pub struct GammaControlData {
 +    output: WeakOutput,
++}
++
++/// Releases a control that owns `output`, restoring the identity ramp.
++///
++/// Controls that failed (`failed` event) are never inserted into `controls`;
++/// calling this for one is a no-op, so a failed client cannot reset the table
++/// of the client that actually owns the output.
++fn release_control<D>(state: &mut D, obj: &ZwlrGammaControlV1, data: &GammaControlData)
++where
++    D: GammaControlHandler,
++{
++    if !state.gamma_control_state().controls.remove(obj) {
++        return;
++    }
++    if let Some(output) = data.output.upgrade() {
++        state.gamma_control_state().forget_table(&output);
++        state.set_output_gamma(&output, None);
++    }
 +}
 +
 +impl<D> GlobalDispatch<ZwlrGammaControlManagerV1, GammaControlManagerGlobalData, D>
@@ -458,6 +504,11 @@ index 00000000..9815828d
 +    ) {
 +        match request {
 +            zwlr_gamma_control_v1::Request::SetGamma { fd } => {
++                // A control that failed does not own the output; ignore its
++                // requests instead of letting it overwrite the owner's ramp.
++                if !state.gamma_control_state().controls.contains(obj) {
++                    return;
++                }
 +                let Some(output) = data.output.upgrade() else {
 +                    obj.failed();
 +                    state.gamma_control_state().controls.remove(obj);
@@ -465,7 +516,7 @@ index 00000000..9815828d
 +                };
 +                let Some(size) = state.gamma_table_size(&output) else {
 +                    obj.failed();
-+                    state.gamma_control_state().controls.remove(obj);
++                    release_control(state, obj, data);
 +                    return;
 +                };
 +
@@ -491,11 +542,7 @@ index 00000000..9815828d
 +                }
 +            }
 +            zwlr_gamma_control_v1::Request::Destroy => {
-+                if let Some(output) = data.output.upgrade() {
-+                    state.gamma_control_state().forget_table(&output);
-+                    state.set_output_gamma(&output, None);
-+                }
-+                state.gamma_control_state().controls.remove(obj);
++                release_control(state, obj, data);
 +            }
 +            _ => unreachable!(),
 +        }
@@ -507,23 +554,41 @@ index 00000000..9815828d
 +        obj: &ZwlrGammaControlV1,
 +        data: &GammaControlData,
 +    ) {
-+        if let Some(output) = data.output.upgrade()
-+            && state.gamma_control_state().forget_table(&output)
-+        {
-+            // The client went away without destroying the control: restore the
-+            // ramp as the protocol requires.
-+            state.set_output_gamma(&output, None);
-+        }
-+        state.gamma_control_state().controls.remove(obj);
++        // The client went away without destroying the control: restore the
++        // ramp as the protocol requires. Failed controls are ignored.
++        release_control(state, obj, data);
 +    }
 +}
 +
-+/// Read `size * 3` little-endian u16s (red, green, blue ramp) from the fd the
++/// Read `size * 3` native-endian u16s (red, green, blue ramp) from the fd the
 +/// client passed to `set_gamma`.
-+fn read_table(fd: OwnedFd, size: u32) -> std::io::Result<Vec<u16>> {
-+    let mut file = File::from(fd);
-+    let mut raw = vec![0u8; size as usize * 3 * 2];
-+    file.read_exact(&mut raw)?;
++///
++/// The fd comes from an untrusted client. Reject anything that is not a
++/// regular file and use `pread` instead of `read`: a pipe or FIFO would block
++/// the whole compositor in `read_exact`, and a regular file is the shape the
++/// protocol asks for (a memfd in practice).
++fn read_table(fd: OwnedFd, size: u32) -> io::Result<Vec<u16>> {
++    let file = File::from(fd);
++    let metadata = file.metadata()?;
++    if !metadata.file_type().is_file() {
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidInput,
++            "gamma table fd is not a regular file",
++        ));
++    }
++
++    let len = (size as usize)
++        .checked_mul(3 * 2)
++        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "gamma table size overflow"))?;
++    if metadata.len() < len as u64 {
++        return Err(io::Error::new(
++            io::ErrorKind::UnexpectedEof,
++            "gamma table file is shorter than the expected table",
++        ));
++    }
++
++    let mut raw = vec![0u8; len];
++    file.read_exact_at(&mut raw, 0)?;
 +    Ok(raw
 +        .chunks_exact(2)
 +        .map(|pair| u16::from_ne_bytes([pair[0], pair[1]]))

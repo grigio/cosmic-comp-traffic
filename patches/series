@@ -1,0 +1,13 @@
+# Applied in this order to every supported upstream tag.
+#
+# Keep this list in sync with patches/common/*.patch: scripts/check-patches.sh
+# fails if a patch is missing from the series or listed twice. Version-specific
+# patches live in patches/<version>/ and are applied after this list.
+0001-macos-traffic-light-decorations.patch
+0002-wlr-foreign-toplevel-management.patch
+0003-three-finger-workspace-swipe.patch
+0004-alt-tab-window-cycle.patch
+0005-wlr-gamma-control.patch
+0006-live-theme-reload.patch
+0007-send-frames-missing-workspace-set.patch
+0008-output-removal-without-unwrap.patch

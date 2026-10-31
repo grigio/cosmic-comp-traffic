@@ -1,11 +1,20 @@
 # cosmic-comp-traffic
 
-Fork of [pop-os/cosmic-comp](https://github.com/pop-os/cosmic-comp) that adds
-macOS-style traffic-light window decorations and a soft focus ring, implements
-`zwlr_foreign_toplevel_manager_v1` so third-party docks and taskbars work,
-implements `wlr-gamma-control-unstable-v1` so night light clients work, cycles
-windows on Alt+Tab without a switcher popup, and ships a ready-to-install
+Patchset for [pop-os/cosmic-comp](https://github.com/pop-os/cosmic-comp) that
+adds macOS-inspired traffic-light window decorations and a soft focus ring,
+implements `zwlr_foreign_toplevel_manager_v1` so third-party docks and taskbars
+work, implements `wlr-gamma-control-unstable-v1` so night light clients work,
+cycles windows on Alt+Tab without a switcher popup, and ships a ready-to-install
 **Arch Linux package for every upstream release tag**.
+
+This is not a hard fork. The patches in `patches/` are applied at package build
+time to a pristine upstream tag; the `src/` tree in this repository is a
+development snapshot and is **not** what the package ships. CI follows upstream
+releases automatically.
+
+The traffic-light cluster is macOS-inspired, not a pixel-perfect copy. Its
+control order and layout are the existing design of this patchset and are
+deliberately left unchanged.
 
 - Releases: <https://github.com/grigio/cosmic-comp-traffic/releases>
 - Base version: upstream tag `epoch-1.10.0` and newer
@@ -16,13 +25,16 @@ windows on Alt+Tab without a switcher popup, and ships a ready-to-install
 |---|---|
 | `src/shell/element/window.rs` | `DefaultDecorations::view` no longer uses libcosmic's `header_bar()`; the titlebar is a themed container with a canvas-drawn traffic light per control (close `#FF5F57`, minimize `#28C840`, maximize `#FEBC2E`, grey `#636366` when unfocused; glyph appears on hover). `SSD_HEIGHT` 36 → 28 so hit-testing matches the new header. `push_render_elements` skips the grey `bg_divider` frame on the focused window, because the focus ring is the outline then. |
 | `src/shell/element/window.rs` | `set_activate` stores the `activated` flag *before* queueing the focus event and uses `force_update()` instead of `force_redraw()`, so the traffic lights follow focus immediately. |
-| `src/backend/render/shaders/rounded_outline.frag` | Signed-distance ring with `FEATHER = 1.5` logical px of falloff on both edges instead of a hard band. |
-| `src/backend/render/mod.rs` | Focus ring element gets 2 px of extra geometry (`pad`) so the glow is not clipped. Other indicators keep `pad: 0`. |
-| `src/input/actions.rs` | `System(WindowSwitcher)` / `System(WindowSwitcherPrevious)` cycle the focus through the windows of the active workspace in stacking order instead of spawning a switcher UI — see [Alt+Tab](#alttab). |
+| `src/backend/render/shaders/rounded_outline.frag` | Signed-distance ring with `FEATHER = 1.5` logical px of falloff on both edges instead of a hard band. The soft edge is only used for the focus ring (`pad > 0`); plain borders keep the stock hard edge. |
+| `src/backend/render/mod.rs` | Focus ring element gets 2 px of extra geometry (`pad`) so the glow is not clipped. Other indicators keep `pad: 0`. The `pad` uniform is now actually uploaded to the shader. |
+| `src/input/mod.rs` | Three-finger touchpad swipes switch workspaces, while upstream's four-finger swipe keeps working too. |
+| `src/input/actions.rs` | `System(WindowSwitcher)` / `System(WindowSwitcherPrevious)` cycle the focus through the windows of the active workspace in stacking order instead of spawning a switcher UI — see [Alt+Tab](#alttab). Expired cycles are dropped so they cannot pin closed windows in memory. |
 | `src/theme.rs` | The theme watcher reloads on any theme change instead of only on a dark/light flip, so `window_hint`, `active_hint` and the `frosted*` flags apply live — see [Live theme reload](#live-theme-reload). |
+| `src/state.rs`, `src/shell/mod.rs` | Output removal no longer `unwrap()`s a missing workspace set while a surface thread is still sending frames or dmabuf feedback. |
 
-All six patches live in `patches/common/` and apply cleanly to `epoch-1.10.0`
-and `epoch-1.11.0`:
+All eight patches live in `patches/common/` and apply cleanly to `epoch-1.10.0`
+and `epoch-1.11.0`. `patches/series` records the order; `scripts/check-patches.sh`
+verifies that every patch is listed and still applies to every supported tag.
 
 - [`0001-macos-traffic-light-decorations.patch`](patches/common/0001-macos-traffic-light-decorations.patch)
   — the traffic lights and the focus ring described above.
@@ -36,6 +48,12 @@ and `epoch-1.11.0`:
   — `wlr-gamma-control-unstable-v1`, described below.
 - [`0006-live-theme-reload.patch`](patches/common/0006-live-theme-reload.patch)
   — theme edits apply without a restart, described below.
+- [`0007-send-frames-missing-workspace-set.patch`](patches/common/0007-send-frames-missing-workspace-set.patch)
+  — a disabled output whose workspace set is already gone no longer aborts
+  frame delivery.
+- [`0008-output-removal-without-unwrap.patch`](patches/common/0008-output-removal-without-unwrap.patch)
+  — the same race is handled in dmabuf feedback and the other output-removal
+  paths, without `unwrap()` panics.
 
 ## Live theme reload
 
@@ -81,7 +99,17 @@ and the order of the first press is remembered per seat for 3 seconds, so holdin
 group, then fullscreen surfaces) and wraps around. Without that memory the cycle
 would bounce between two windows, because focusing a window raises it and thus
 changes the stacking order. A press after the 3 seconds starts a new cycle from
-whatever is focused then.
+whatever is focused then. Expired cycles are dropped during the normal
+compositor refresh, so the strong window references they hold do not keep closed
+surfaces alive until logout.
+
+## Workspace swipes
+
+Upstream leaves three-finger swipes unhandled (`3 => None`) and switches
+workspaces with four fingers. `0003` accepts both: `3 | 4` uses the existing
+workspace-switch logic, honouring the configured horizontal/vertical workspace
+layout and natural-scroll setting. The four-finger gesture is not taken away
+from users who are used to it.
 
 ## zwlr_foreign_toplevel_manager_v1
 
@@ -90,12 +118,15 @@ app-id but neither toplevel state nor requests, so docks that speak the wlr
 protocol (waybar's `wlr/taskbar`, sfwbar, lxqt-panel, noctalia, ...) see no
 windows at all on COSMIC ([pop-os/cosmic-comp#3002](https://github.com/pop-os/cosmic-comp/issues/3002)).
 
-The second patch adds the wlr manager (version 3) next to the existing globals,
-behind the same `client_not_sandboxed` filter:
+The second patch adds the wlr manager (version 2) next to the existing globals,
+behind the same `client_not_sandboxed` filter. Version 3 adds the `parent`
+event, but this compositor does not track a toplevel parent in the window model,
+so advertising v2 is more honest than leaving v3 clients waiting for an event
+that never arrives.
 
 | File | Change |
 |---|---|
-| `src/wayland/protocols/wlr_foreign_toplevel.rs` | New. Mirrors the toplevels tracked by `ToplevelInfoState` to every bound manager (`title`, `app_id`, `output_enter/leave`, `state`, `done`, `closed`) and forwards `activate`, `close`, `set/unset_minimized`, `set/unset_maximized` and `set/unset_fullscreen` to `ToplevelManagementHandler`, so the actions behave exactly like `zcosmic_toplevel_manager_v1`. |
+| `src/wayland/protocols/wlr_foreign_toplevel.rs` | New. Mirrors the toplevels tracked by `ToplevelInfoState` to every bound manager (`title`, `app_id`, `output_enter/leave`, `state`, `done`, `closed`) and forwards `activate`, `close`, `set/unset_minimized`, `set/unset_maximized` and `set/unset_fullscreen` to `ToplevelManagementHandler`, so the actions behave exactly like `zcosmic_toplevel_manager_v1`. A handle the client destroys is not recreated for that toplevel, as the protocol requires. |
 | `src/wayland/handlers/wlr_foreign_toplevel.rs` | New. Implements the handler for `State` and delegates the two protocol objects. |
 | `src/wayland/protocols/toplevel_info.rs` | Exposes the outputs a toplevel is on, so the wlr handles can send `output_enter`/`output_leave`. |
 | `src/state.rs`, `src/shell/mod.rs` | Creates the global and refreshes the wlr handles from `Common::refresh`, right after the toplevel-info refresh. |
@@ -113,7 +144,7 @@ that protocol nor `wp_color_manager_v1`, so the night light toggle in noctalia (
 
 | File | Change |
 |---|---|
-| `src/wayland/protocols/gamma_control.rs` | New. Manager global and per-output control. One control per output (a second one gets `failed`), `gamma_size` from the CRTC's `gamma_length`, the ramp read from the fd the client passes and handed to the backend. |
+| `src/wayland/protocols/gamma_control.rs` | New. Manager global and per-output control. One control per output (a second one gets `failed`), `gamma_size` from the CRTC's `gamma_length`, and the ramp read from a regular-file fd the client passes and handed to the backend. Failed controls cannot touch the owner's ramp. |
 | `src/wayland/handlers/gamma_control.rs` | New. Implements the handler for `State` and delegates the two protocol objects. |
 | `src/backend/kms/mod.rs` | `gamma_table_size` / `set_output_gamma`: find the CRTC(s) showing an output (mirrors included) and program the legacy ramp with `set_gamma`, retrying on `EBUSY`. |
 | `src/wayland/handlers/output_power.rs` | Re-sends the last table when an output is powered back on, because a DPMS cycle drops the LUT. |
@@ -128,11 +159,17 @@ Details worth knowing when debugging it:
 - `crtc_info().gamma_length()` is 256 on Intel (the legacy palette size) while
   the atomic `GAMMA_LUT_SIZE` property is 1024. Clients are told 256 and the
   driver resamples, which is what the protocol expects.
-- The last table is kept per output and re-sent on DPMS-on. A hotplug re-creates
-  the surface with an identity ramp; a client that stays connected is expected to
-  resend, as on any other compositor.
+- The last table is kept per output (as a `WeakOutput`, so a removed output is
+  not kept alive) and re-sent on DPMS-on. A hotplug re-creates the surface with
+  an identity ramp; a client that stays connected is expected to resend, as on
+  any other compositor.
 - Destroying the control — or the client disconnecting — restores the identity
-  ramp, as the protocol requires.
+  ramp, as the protocol requires. A control that already received `failed` does
+  not own the output, so its `set_gamma`/`destroy` requests are ignored instead
+  of resetting the real owner's table.
+- The client-supplied fd is checked to be a regular file and read with
+  `pread` (`FileExt::read_exact_at`). A pipe or FIFO would otherwise block the
+  whole compositor in `read_exact`.
 
 ## Install
 
@@ -143,6 +180,10 @@ Details worth knowing when debugging it:
 # a specific upstream tag
 ./scripts/install-latest.sh epoch-1.11.0
 ```
+
+With no argument the script selects the highest `epoch-X.Y.Z` release itself
+instead of trusting GitHub's "Latest" marker, which can point at an older tag
+when that tag was rebuilt more recently.
 
 Or by hand:
 
@@ -171,26 +212,34 @@ sudo pacman -S cosmic-comp
    with `X.Y.Z >= MIN_VERSION` (currently `1.10.0`), drops the ones that already
    have a release here. Runs every 6 hours, and on demand.
 2. **build** — in an `archlinux:base-devel` container: installs the build deps,
-   clones the upstream tag, applies `patches/common/*.patch` plus
-   `patches/<version>/*.patch` if that directory exists, and runs `makepkg`
+   clones the upstream tag, applies the patches listed in `patches/series`
+   plus `patches/<version>/*.patch` if that directory exists, and runs `makepkg`
    (fat → thin LTO, `lld`), producing a signed-checksum `.pkg.tar.zst`.
 3. **publish** — mirrors the upstream tag into this fork (so the release points
    at the upstream commit) and attaches the package plus its `.sha256` to a
-   release named after the tag.
+   release named after the tag. The newest supported tag is explicitly marked
+   as GitHub's "Latest", so rebuilding an older tag cannot steal the marker.
 4. **prune** — deletes the packages of older `pkgrel`s from the same release,
    including their `.sha256` and `-debug` files, so a rebuilt tag carries
    exactly one build.
+
+[`.github/workflows/validate.yml`](.github/workflows/validate.yml) runs on
+changes to the patches, scripts, PKGBUILD or workflows. It checks the shell
+scripts with `shellcheck`, validates that `patches/series` lists every common
+patch exactly once, applies the series to every supported upstream tag, and runs
+`cargo fmt --check` on the result.
 
 If a patch stops applying to a new upstream tag, the build fails and the release
 is not created — the next scheduled run retries it, so a broken patch is visible
 instead of silently shipping an unpatched compositor.
 
-`pkgrel` is the number of commits that touched `PKGBUILD` or `patches/`, so any
-patch change automatically produces a version pacman considers an upgrade. A
-rebuild only keeps that newest `pkgrel`: older assets are pruned from the
-release, because `gh release download -p '*.pkg.tar.zst*'` would otherwise fetch
-several builds and `sudo pacman -U ./*` would install whichever one the shell
-globs last.
+`pkgrel` is the number of commits that touched `PKGBUILD`, `patches/` or
+`.github/workflows/release.yml`, so any patch change automatically produces a
+version pacman considers an upgrade (a workflow-only rebuild also gets a new
+`pkgrel`). A rebuild only keeps that newest `pkgrel`: older assets are pruned
+from the release, because `gh release download -p '*.pkg.tar.zst*'` would
+otherwise fetch several builds and `sudo pacman -U ./*` would install whichever
+one the shell globs last.
 
 ### Triggers
 
@@ -199,6 +248,7 @@ globs last.
 | `schedule` (every 6 h) | builds every missing tag ≥ `MIN_VERSION` |
 | `workflow_dispatch` | builds one tag (`tag` input) or every missing one; `force` rebuilds existing releases |
 | push to `master` touching `PKGBUILD`, `patches/**` or the workflow | rebuilds the newest tag and overwrites its release |
+| push/PR touching `PKGBUILD`, `patches/**`, `scripts/**` or the workflows | runs the validation workflow (series, patch application, formatting) |
 
 > Scheduled workflows are disabled by default in forks — keep them enabled under
 > *Actions* in the repository settings. Upstream's own `ci.yml` and
@@ -215,7 +265,8 @@ the official `cosmic-comp` epoch.
 Patches are applied at build time, so nothing has to be rebased:
 
 1. If the change is generic, update `patches/common/*.patch` (regenerate against
-   the newest tag).
+   the newest tag) and list it in `patches/series`. The series is the application
+   order; `scripts/check-patches.sh` fails if a common patch is missing from it.
 2. If a new upstream tag needs an extra fix, add
    `patches/<version>/0001-something.patch` — it is applied after `common/`
    for that version only.

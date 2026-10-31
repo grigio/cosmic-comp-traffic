@@ -1,5 +1,5 @@
 diff --git a/src/shell/mod.rs b/src/shell/mod.rs
-index 84d0b33e..9bb3c5e2 100644
+index 87b7a889..e0d9e1b7 100644
 --- a/src/shell/mod.rs
 +++ b/src/shell/mod.rs
 @@ -1388,12 +1388,16 @@ impl Workspaces {
@@ -31,7 +31,7 @@ index 84d0b33e..9bb3c5e2 100644
      }
  
      pub fn iter(&self) -> impl Iterator<Item = (&Output, &WorkspaceSet)> {
-@@ -2139,16 +2142,19 @@ impl Shell {
+@@ -2141,16 +2144,19 @@ impl Shell {
              // sticky window ?
              .or_else(|| {
                  self.outputs().find(|o| {
@@ -56,7 +56,7 @@ index 84d0b33e..9bb3c5e2 100644
  
                      workspace
                          .get_fullscreen_surfaces()
-@@ -4258,7 +4264,9 @@ impl Shell {
+@@ -4260,7 +4266,9 @@ impl Shell {
              return FocusResult::None;
          }
  

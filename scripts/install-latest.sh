@@ -14,11 +14,20 @@ command -v pacman >/dev/null || { echo "pacman is required" >&2; exit 1; }
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
 
-if [[ -n $tag ]]; then
-  gh release download "$tag" --repo "$repo" --pattern '*.pkg.tar.zst*' --dir "$dir"
-else
-  gh release download --repo "$repo" --pattern '*.pkg.tar.zst*' --dir "$dir"
+if [[ -z $tag ]]; then
+  # Do not trust GitHub's "Latest" marker: rebuilding an older tag updates its
+  # published_at and can make it win the marker. Pick the highest epoch-X.Y.Z
+  # version instead.
+  tag=$(gh release list --repo "$repo" --limit 1000 --json tagName --jq '.[].tagName' |
+    grep -E '^epoch-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
+  if [[ -z $tag ]]; then
+    echo "no epoch-X.Y.Z release found in $repo" >&2
+    exit 1
+  fi
+  echo "Using newest release: $tag"
 fi
+
+gh release download "$tag" --repo "$repo" --pattern '*.pkg.tar.zst*' --dir "$dir"
 
 (cd "$dir" && sha256sum --check --quiet ./*.pkg.tar.zst.sha256)
 

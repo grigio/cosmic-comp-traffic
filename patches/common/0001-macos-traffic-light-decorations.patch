@@ -1,5 +1,5 @@
 diff --git a/src/backend/render/mod.rs b/src/backend/render/mod.rs
-index 9ad6158..f1d3f66 100644
+index 9ad61588..da9b9d3e 100644
 --- a/src/backend/render/mod.rs
 +++ b/src/backend/render/mod.rs
 @@ -188,6 +188,7 @@ impl From<Id> for Key {
@@ -71,8 +71,20 @@ index 9ad6158..f1d3f66 100644
              outer_radius,
              alpha,
              scale,
+@@ -283,6 +315,11 @@ impl IndicatorShader {
+                         [color[0] * alpha, color[1] * alpha, color[2] * alpha],
+                     ),
+                     Uniform::new("thickness", thickness),
++                    // `pad` is how far the element extends past the ring's outer
++                    // edge. The shader needs it to shrink the ring back to the
++                    // window bounds; without it the focus ring floats outside
++                    // the window and the glow is clipped at the element edge.
++                    Uniform::new("pad", pad as f32),
+                     Uniform::new(
+                         "radius",
+                         [
 diff --git a/src/backend/render/shaders/rounded_outline.frag b/src/backend/render/shaders/rounded_outline.frag
-index d3266e6..0c4da69 100644
+index d3266e60..154f712f 100644
 --- a/src/backend/render/shaders/rounded_outline.frag
 +++ b/src/backend/render/shaders/rounded_outline.frag
 @@ -10,50 +10,55 @@ uniform vec3 color;
@@ -150,11 +162,11 @@ index d3266e6..0c4da69 100644
 +    float d = rounded_rect_distance(location - half_size, ring_half_size, ring_radius);
 +
 +    // The ring occupies the `thickness` px just inside the outer boundary.
-+    // Both edges get at least the physical pixel grid as antialiasing, plus
-+    // FEATHER of falloff. Keeping the peak centred on the band means a 1px
-+    // configured hint still leaves a visible, soft line.
++    // The focus ring (pad > 0) also gets FEATHER of falloff on both edges;
++    // plain borders (pad == 0) keep the stock hard edge plus pixel-grid
++    // antialiasing, so group/pill outlines are not softened.
 +    float half_band = max(thickness * 0.5, 0.5 / scale);
-+    float falloff = max(FEATHER, 0.5 / scale);
++    float falloff = pad > 0.0 ? max(FEATHER, 0.5 / scale) : 0.5 / scale;
 +    float ring_alpha = 1.0 - smoothstep(half_band, half_band + falloff, abs(d + half_band));
  
 -    vec4 mix_color = mix(vec4(0.0, 0.0, 0.0, 0.0), vec4(color, alpha), outer_alpha * inner_alpha);
@@ -165,10 +177,10 @@ index d3266e6..0c4da69 100644
      #if defined(DEBUG_FLAGS)
      if (tint == 1.0)
 diff --git a/src/shell/element/window.rs b/src/shell/element/window.rs
-index fa4a187..5fa446e 100644
+index 15277a07..1f021d7e 100644
 --- a/src/shell/element/window.rs
 +++ b/src/shell/element/window.rs
-@@ -16,7 +16,16 @@ use crate::{
+@@ -17,7 +17,16 @@ use crate::{
      },
  };
  use calloop::LoopHandle;
@@ -186,7 +198,7 @@ index fa4a187..5fa446e 100644
  use cosmic_comp_config::AppearanceConfig;
  use smithay::{
      backend::{
-@@ -75,7 +84,8 @@ use wayland_backend::server::ObjectId;
+@@ -76,7 +85,8 @@ use wayland_backend::server::ObjectId;
  
  use super::CosmicSurface;
  
@@ -196,7 +208,7 @@ index fa4a187..5fa446e 100644
  pub const RESIZE_BORDER: i32 = 10;
  
  #[derive(Clone, PartialEq, Eq, Hash)]
-@@ -525,10 +535,14 @@ impl CosmicWindow {
+@@ -526,10 +536,14 @@ impl CosmicWindow {
              location
          };
  
@@ -213,7 +225,7 @@ index fa4a187..5fa446e 100644
              )
          });
          geo.loc += location.to_f64().to_logical(scale);
-@@ -539,7 +553,7 @@ impl CosmicWindow {
+@@ -540,7 +554,7 @@ impl CosmicWindow {
              geo.size = geo.size.clamp(Size::default(), max_size.to_f64());
          }
  
@@ -222,7 +234,7 @@ index fa4a187..5fa446e 100644
              let window_key =
                  CosmicMappedKey(CosmicMappedKeyInner::Window(Arc::downgrade(&self.0.0)));
  
-@@ -865,29 +879,260 @@ impl Program for CosmicWindowInternal {
+@@ -872,29 +886,260 @@ impl Program for CosmicWindowInternal {
  #[derive(Debug)]
  pub struct DefaultDecorations;
  
@@ -495,7 +507,7 @@ index fa4a187..5fa446e 100644
      }
  }
  
-@@ -923,12 +1168,17 @@ impl SpaceElement for CosmicWindow {
+@@ -930,12 +1175,17 @@ impl SpaceElement for CosmicWindow {
              .0
              .with_program(|p| p.activated.load(Ordering::SeqCst) != activated)
          {

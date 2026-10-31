@@ -54,6 +54,7 @@ jobs:
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       count: ${{ steps.plan.outputs.count }}
+      latest_tag: ${{ steps.plan.outputs.latest_tag }}
     steps:
       - name: Plan builds
         id: plan
@@ -98,26 +99,32 @@ jobs:
           if rel.returncode == 0:
               existing = {line.strip() for line in rel.stdout.splitlines() if line.strip()}
 
+          supported = sorted(
+              ((t, v) for t, v in tags.items() if vkey(v) >= vkey(min_version)),
+              key=lambda item: vkey(item[1]),
+          )
+          # Newest tag we are willing to build, used to keep the GitHub
+          # "Latest" marker on the newest release even when an older release is
+          # republished later.
+          latest_tag = supported[-1][0] if supported else ""
+
           if input_tag:
               tag = input_tag if input_tag.startswith("epoch-") else f"epoch-{input_tag}"
+              if not re.fullmatch(r"epoch-\d+\.\d+\.\d+", tag):
+                  raise SystemExit(f"invalid tag: {tag}")
+              if tag not in tags:
+                  raise SystemExit(f"tag not found upstream: {tag}")
               selected = [(tag, tag[len("epoch-"):])]
           elif latest_only:
-              candidates = sorted(
-                  ((t, v) for t, v in tags.items() if vkey(v) >= vkey(min_version)),
-                  key=lambda item: vkey(item[1]),
-              )
-              selected = candidates[-1:]
+              selected = supported[-1:]
           else:
-              selected = sorted(
-                  ((t, v) for t, v in tags.items()
-                   if vkey(v) >= vkey(min_version) and (force or t not in existing)),
-                  key=lambda item: vkey(item[1]),
-              )
+              selected = [(t, v) for t, v in supported if force or t not in existing]
 
           matrix = [{"tag": tag, "version": version} for tag, version in selected]
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               out.write(f"matrix={json.dumps(matrix)}\n")
               out.write(f"count={len(matrix)}\n")
+              out.write(f"latest_tag={latest_tag}\n")
           print(f"{len(matrix)} build(s): {json.dumps(matrix)}")
           PY
 
@@ -176,7 +183,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          pkgrel=$(git rev-list --count HEAD -- PKGBUILD patches)
+          pkgrel=$(git rev-list --count HEAD -- PKGBUILD patches .github/workflows/release.yml)
           (( pkgrel >= 1 )) || pkgrel=1
           echo "building cosmic-comp $COSMIC_COMP_VERSION (pkgrel $pkgrel)"
 
@@ -225,6 +232,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ matrix.tag }}
           VERSION: ${{ matrix.version }}
+          LATEST_TAG: ${{ needs.discover.outputs.latest_tag }}
           FORCE: ${{ inputs.force || github.event_name == 'push' }}
         run: |
           set -euo pipefail
@@ -285,6 +293,14 @@ jobs:
               --verify-tag
           fi
 
+          # GitHub's "Latest" marker follows the most recently published
+          # release, so rebuilding an older tag can steal it. Pin it back to
+          # the newest upstream tag we build.
+          if [[ -n $LATEST_TAG && $TAG == "$LATEST_TAG" ]]; then
+            echo "marking $TAG as latest"
+            gh release edit "$TAG" --latest --repo "$GITHUB_REPOSITORY"
+          fi
+
       - name: Prune older pkgrel assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -297,7 +313,7 @@ jobs:
 
           # Same derivation as the build step, so "older" means strictly below
           # the pkgrel this run just uploaded.
-          pkgrel=$(git rev-list --count HEAD -- PKGBUILD patches)
+          pkgrel=$(git rev-list --count HEAD -- PKGBUILD patches .github/workflows/release.yml)
           (( pkgrel >= 1 )) || pkgrel=1
 
           # Rebuilding a tag used to leave every previous pkgrel behind, so

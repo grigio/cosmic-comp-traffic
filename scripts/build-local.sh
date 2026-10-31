@@ -20,7 +20,7 @@ if [[ -z $version ]]; then
 fi
 version=${version#epoch-}
 
-pkgrel=$(git -C "$repo_dir" rev-list --count HEAD -- PKGBUILD patches)
+pkgrel=$(git -C "$repo_dir" rev-list --count HEAD -- PKGBUILD patches .github/workflows/release.yml)
 (( pkgrel >= 1 )) || pkgrel=1
 
 echo "==> cosmic-comp $version, pkgrel $pkgrel"

@@ -51,11 +51,11 @@ replaces=(cosmic-comp)
 source=("cosmic-comp::git+https://github.com/pop-os/cosmic-comp.git")
 sha256sums=('SKIP')
 
-_patch_dirs() {
-  printf '%s\n' "$startdir/patches/common"
-  if [[ -d "$startdir/patches/$pkgver" ]]; then
-    printf '%s\n' "$startdir/patches/$pkgver"
-  fi
+_apply_patch() {
+  local patch=$1
+  [[ -e "$patch" ]] || return 0
+  msg2 "Applying $(basename "$patch")"
+  git apply --whitespace=nowarn -p1 "$patch"
 }
 
 prepare() {
@@ -66,15 +66,41 @@ prepare() {
 
   cargo fetch --locked
 
-  local dir patch applied=0
-  while read -r dir; do
-    for patch in "$dir"/*.patch; do
+  local applied=0
+  local series="$startdir/patches/series"
+  if [[ -f "$series" ]]; then
+    # The series file is the explicit order; scripts/check-patches.sh verifies
+    # that it lists every common patch exactly once.
+    local name patch
+    while IFS= read -r name || [[ -n "$name" ]]; do
+      name=${name%%#*}
+      name=${name//[[:space:]]/}
+      [[ -z "$name" ]] && continue
+      patch="$startdir/patches/common/$name"
+      if [[ ! -f "$patch" ]]; then
+        error "patches/series lists a missing patch: $name"
+        return 1
+      fi
+      _apply_patch "$patch"
+      applied=$((applied + 1))
+    done < "$series"
+  else
+    local patch
+    for patch in "$startdir/patches/common"/*.patch; do
       [[ -e "$patch" ]] || continue
-      msg2 "Applying $(basename "$patch")"
-      git apply --whitespace=nowarn -p1 "$patch"
+      _apply_patch "$patch"
       applied=$((applied + 1))
     done
-  done < <(_patch_dirs)
+  fi
+
+  if [[ -d "$startdir/patches/$pkgver" ]]; then
+    local patch
+    for patch in "$startdir/patches/$pkgver"/*.patch; do
+      [[ -e "$patch" ]] || continue
+      _apply_patch "$patch"
+      applied=$((applied + 1))
+    done
+  fi
 
   if ((applied == 0)); then
     error "No patches found for $pkgver"
