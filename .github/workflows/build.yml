@@ -46,7 +46,7 @@ jobs:
           path: bin/
 
       - name: Make executable
-        run: chmod +x bin/cosmic-comp
+        run: chmod +x bin/cosmic-comp-traffic
 
       - name: Run basic test
-        run: ./bin/cosmic-comp --version
+        run: ./bin/cosmic-comp-traffic --version
