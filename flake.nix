@@ -1,18 +1,20 @@
 {
-  description = "Compositor for the COSMIC desktop environment";
+  description = "Compositor for the COSMIC desktop environment with traffic-light decorations";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     parts.url = "github:hercules-ci/flake-parts";
     parts.inputs.nixpkgs-lib.follows = "nixpkgs";
 
-    crane.url = "github:ipetkov/crane";
+    crane.url = "github:ipetkov/crane/63396562b8e08efda3b3c66e32661b8a513055de";
+    crane.inputs.nixpkgs.follows = "nixpkgs";
 
     rust.url = "github:oxalica/rust-overlay";
     rust.inputs.nixpkgs.follows = "nixpkgs";
 
     nix-filter.url = "github:numtide/nix-filter";
+    nix-filter.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -43,18 +45,23 @@
           rust-toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
           craneLib = (crane.mkLib pkgs).overrideToolchain rust-toolchain;
           craneArgs = {
-            pname = "cosmic-comp";
+            pname = "cosmic-comp-traffic";
             version = self.rev or "dirty";
 
             src = nix-filter.lib.filter {
               root = ./.;
               include = [
                 ./src
+                ./cosmic-comp-config
+                ./data
+                ./resources
                 ./i18n.toml
                 ./Cargo.toml
                 ./Cargo.lock
-                ./resources
-                ./cosmic-comp-config
+                ./rust-toolchain.toml
+                ./rustfmt.toml
+                ./build.rs
+                ./justfile
               ];
             };
 
@@ -62,6 +69,8 @@
               pkg-config
               autoPatchelfHook
               cmake
+              just
+              libdisplay-info
             ];
 
             buildInputs = with pkgs; [
@@ -74,6 +83,28 @@
               fontconfig
               stdenv.cc.cc.lib
               pixman
+              dbus
+              glib
+              gsettings-desktop-schemas
+              librsvg
+              libpng
+              libjpeg_turbo
+              libwebp
+              alsa-lib
+              freepats
+              libXi
+              libXrandr
+              libXfixes
+              libXext
+              libXdamage
+              libXcomposite
+              libXrender
+              libXxf86vm
+              libxcb
+              vulkan-loader
+            ];
+
+            propagatedBuildInputs = with pkgs; [
               libdisplay-info
             ];
 
@@ -81,27 +112,29 @@
               libglvnd # For libEGL
               wayland # winit->wayland-sys wants to dlopen libwayland-egl.so
               # for running in X11
-              xorg.libX11
-              xorg.libXcursor
-              xorg.libxcb
-              xorg.libXi
+              libx11
+              libxcursor
+              libxcb
+              libxi
               libxkbcommon
               # for vulkan backend
               vulkan-loader
             ];
+
+            doCheck = false;
+            strictDeps = false;
           };
 
-          cargoArtifacts = craneLib.buildDepsOnly craneArgs;
-          cosmic-comp = craneLib.buildPackage (craneArgs // { inherit cargoArtifacts; });
+          cosmic-comp-traffic = craneLib.buildPackage craneArgs;
         in
         {
-          apps.cosmic-comp = {
+          apps.cosmic-comp-traffic = {
             type = "app";
-            program = lib.getExe self'.packages.default;
+            program = lib.getExe' self'.packages.default "cosmic-comp";
           };
 
-          checks.cosmic-comp = cosmic-comp;
-          packages.default = cosmic-comp;
+          checks.cosmic-comp-traffic = cosmic-comp-traffic;
+          packages.default = cosmic-comp-traffic;
 
           devShells.default = craneLib.devShell {
             LD_LIBRARY_PATH = lib.makeLibraryPath (
@@ -109,7 +142,7 @@
             );
 
             # include build inputs
-            inputsFrom = [ cosmic-comp ];
+            inputsFrom = [ cosmic-comp-traffic ];
           };
         };
     };

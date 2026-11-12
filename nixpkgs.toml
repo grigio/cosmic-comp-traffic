@@ -1,0 +1,48 @@
+# Nix configuration for this flake.
+#
+# This file documents the flake inputs and can be used by tools like
+# nixpkgs-update or flake-parts to understand the flake structure.
+
+[nixpkgs]
+url = "github:NixOS/nixpkgs/nixos-unstable"
+allowUnfree = true
+
+[system]
+# Target system (override in CI matrix)
+default = "x86_64-linux"
+
+[packages]
+# The canonical package name exposed by the flake
+default = "cosmic-comp-traffic"
+
+[devShells]
+default = [
+  "rustc",
+  "cargo",
+  "pkg-config",
+]
+
+[experimental-features]
+flakes = true
+
+[flake-parts]
+# Flake-parts configuration
+# See https://github.com/hercules-ci/flake-parts
+enabled = true
+
+[crane]
+# Crane configuration
+# See https://github.com/ipetkov/crane
+enabled = true
+# Use the same crane revision as cosmic-comp for compatibility
+rev = "63396562b8e08efda3b3c66e32661b8a513055de"
+
+[rust-overlay]
+# Oxalica rust-overlay configuration
+# See https://github.com/oxalica/rust-overlay
+enabled = true
+
+[nix-filter]
+# Nix-filter configuration for source filtering
+# See https://github.com/numtide/nix-filter
+enabled = true
