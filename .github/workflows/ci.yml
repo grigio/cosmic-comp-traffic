@@ -80,11 +80,43 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
         with:
           profile: nix-command
-      - name: Flake check
-        run: nix build .#default --print-build-logs
+          extra-conf: |
+            sandbox = relaxed
+            extra-experimental-features = nix-command flakes
+
+      - name: Vendor cargo dependencies
+        run: |
+          cargo vendor --versioned-dirs --manifest-path Cargo.toml
+
+      - name: Flake check (with vendored deps)
+        run: |
+          nix build --impure --expr '
+            let
+              flake = import ./flake.nix;
+              pkgs = import <nixpkgs> {};
+              # Override the flake to use our vendored dependencies
+              overridden = flake // {
+                cargoVendorDir = ./vendor;
+              };
+            in
+            (overridden.packages.x86_64-linux.default)
+          ' --print-build-logs
+
       - name: Flake dev-shell check
-        run: nix shell .#default
+        run: |
+          nix shell --impure --expr '
+            let
+              flake = import ./flake.nix;
+              overridden = flake // {
+                cargoVendorDir = ./vendor;
+              };
+            in
+            overridden.devShells.x86_64-linux.default
+          '
