@@ -1,57 +1,45 @@
-# Cosmic Comp Traffic
+# cosmic-comp-traffic
 
-A traffic monitoring and visualization tool for the Cosmic Comp desktop environment.
+A fork of [pop-os/cosmic-comp](https://github.com/pop-os/cosmic-comp) with macOS-style traffic-light window decorations and additional patches.
+
+This is the COSMIC compositor with traffic-light close/minimize/maximize buttons on window decorations, plus several quality-of-life patches.
+
+## Patches Applied
+
+- **macOS traffic-light decorations** - Close/minimize/maximize buttons on window titlebars
+- **wlr-foreign-toplevel-management** - Better window management integration
+- **Three-finger workspace swipe** - Touchpad gesture for workspace switching
+- **Alt-tab window cycling** - Improved window cycling behavior
+- **wlr-gamma-control** - Gamma control protocol support
+- **Live theme reload** - Theme changes apply without restart
+- **Frame callback fixes** - Missing workspace set handling
+- **Output removal fixes** - Avoid unwrap panics on output removal
 
 ## Prerequisites
 
-- [Cosmic Desktop Environment](https://cosmic.linux.freedesktop.org/)
-- [GTK4](https://github.com/GTK/GTK4)
-- [GStreamer](https://gstreamer.freedesktop.org/)
-- [Wayland](https://wayland.freedesktop.org/)
+- Rust toolchain (managed via rust-toolchain.toml)
+- System dependencies (see flake.nix or CI for full list)
 
 ## Building
 
-### From Source
-
-```bash
-# Clone the repository
-git clone https://github.com/cosmic-cosmic/cosmic-comp-traffic.git
-cd cosmic-comp-traffic
-
-# Install dependencies
-sudo pacman -S cosmic-comp gst-plugins-base gst-plugins-good gst-plugins-bad gst-omx gtk4 cairo glib libadwaita
-
-# Build
-cargo build --release
-
-# Run
-./target/release/cosmic-comp-traffic
-```
-
-## Installation
-
 ### Nix Flake (Recommended)
 
-This repository is a Nix flake. You can build and install it without any
-additional configuration:
+This repository is a Nix flake. You can build and run it directly:
 
 ```bash
-# Build
-nix build github:cosmic-cosmic/cosmic-comp-traffic
+# Build from GitHub
+nix build github:grigio/cosmic-comp-traffic
 
-# Inspect the binary
+# Run the compositor
 ./result/bin/cosmic-comp
-
-# Install to your Nix profile (requires the nix-command profile)
-nix profile add github:cosmic-cosmic/cosmic-comp-traffic
 ```
 
-If you prefer to build from a local clone:
+Or from a local clone:
 
 ```bash
-git clone https://github.com/cosmic-cosmic/cosmic-comp-traffic.git
+git clone https://github.com/grigio/cosmic-comp-traffic.git
 cd cosmic-comp-traffic
-nix build .#cosmic-comp-traffic
+nix build .#default
 ./result/bin/cosmic-comp
 ```
 
@@ -61,22 +49,54 @@ nix build .#cosmic-comp-traffic
 # Enter a shell with all Rust + system dependencies
 nix develop
 
-# Run tests
-cargo test
-
-# Build
-cargo build --release
+# Inside the shell:
+cargo test          # Run tests
+cargo build --release  # Build release
+./target/release/cosmic-comp  # Run
 ```
 
-### Flatpak
+### Cargo (Without Nix)
 
 ```bash
-# Build Flatpak package (requires the Flatpak SDK)
-flatpak build -p cosmic-comp-traffic
-
-# Install
-flatpak install cosmic-comp-traffic
+# Install system dependencies first (see CI for package list)
+# Then:
+cargo build --release
+./target/release/cosmic-comp
 ```
+
+## Installation
+
+### Nix Profile
+
+```bash
+nix profile add github:grigio/cosmic-comp-traffic
+```
+
+### NixOS Module
+
+Add to your `configuration.nix`:
+
+```nix
+inputs.cosmic-comp-traffic.url = "github:grigio/cosmic-comp-traffic";
+
+{ config, pkgs, ... }:
+{
+  programs.cosmic-comp-traffic.enable = true;
+}
+```
+
+### Arch Linux (AUR)
+
+Packages are built automatically for each upstream release and published to GitHub Releases. Install with:
+
+```bash
+# Download latest release
+gh release download -R grigio/cosmic-comp-traffic -p 'cosmic-comp-traffic-*.pkg.tar.zst*' -D /tmp/cosmic-comp-traffic
+cd /tmp/cosmic-comp-traffic && sha256sum -c ./*.pkg.tar.zst.sha256
+sudo pacman -U ./*.pkg.tar.zst
+```
+
+The package is called `cosmic-comp-traffic`, provides/conflicts/replaces `cosmic-comp`, and installs the same files to the same paths.
 
 ## Development
 
@@ -91,88 +111,39 @@ cargo test
 
 # Build
 cargo build --release
+
+# Run clippy
+cargo clippy --all-features -- -D warnings
+
+# Check formatting
+cargo fmt --all -- --check
 ```
 
-## Running
+### Running Tests
 
 ```bash
-./target/release/cosmic-comp-traffic
+nix develop --command cargo test
 ```
+
+### CI Pipeline
+
+The CI runs:
+- **format** - `cargo fmt --all -- --check`
+- **clippy-check** - `cargo clippy --all-features -- -D warnings`
+- **check-features** - `cargo check` with various feature combinations
+- **test** - `cargo test --all-features` (with libseat built from source)
+- **nix-build** - `nix build .#default`
 
 ## Configuration
 
-### Command-line Options
+The compositor uses COSMIC's standard configuration system. See [cosmic-comp](https://github.com/pop-os/cosmic-comp) for configuration details.
 
-```
-Usage: cosmic-comp-traffic [OPTIONS]
+## Upstream
 
-Options:
-  -v, --verbose                Enable verbose output
-  -q, --quiet                  Suppress non-error output
-  -c, --config <PATH>          Path to configuration file
-  -h, --help                   Print help information
-  -V, --version                Print version information
-```
-
-### Configuration Files
-
-The application reads configuration from:
-- `~/.config/cosmic-comp-traffic/config.json`
-- `$XDG_CONFIG_HOME/cosmic-comp-traffic/config.json`
+This fork tracks [pop-os/cosmic-comp](https://github.com/pop-os/cosmic-comp). Patches are maintained in the `patches/` directory and applied automatically during build.
 
 ## License
 
-This project is licensed under the terms of the [GPL-3.0-or-later](LICENSE) license.
+GPL-3.0-or-later - see [LICENSE](LICENSE)
 
-## Contributing
-
-Please read the contributing guidelines before submitting a pull request. We appreciate your contributions!
-
-### Nix Development
-
-This project uses Nix for reproducible builds and dependency management. When contributing:
-
-1. **Test your changes with Nix**:
-   ```bash
-   nix develop --command cargo test
-   ```
-
-2. **Update the flake.nix if needed**:
-   - Add new dependencies to the appropriate section
-   - Ensure all packages are compatible with nixpkgs
-
-3. **Test the CI**:
-   ```bash
-   nix ci .#cosmic-comp-traffic
-   ```
-
-4. **Ensure the flake builds**:
-   ```bash
-   nix-build -A cosmic-comp-traffic
-   ```
-
-### Building and Testing
-
-- **Regular development**:
-  ```bash
-  nix develop --command ./build.sh
-  ```
-
-- **Testing**:
-  ```bash
-  nix develop --command cargo test
-  ```
-
-- **Build for release**:
-  ```bash
-  nix develop --command cargo build --release
-  ```
-
-- **Run with Nix**:
-  ```bash
-  nix build -L .#cosmic-comp-traffic
-  ```
-
-## Credits
-
-Built with ❤️ for the Cosmic Desktop community.
+Based on COSMIC Comp by System76/Pop!_OS, licensed under GPL-3.0-only.
