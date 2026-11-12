@@ -1,0 +1,52 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build with Nix
+        run: |
+          nix --extra-experimental-features nix-command --extra-experimental-features flakes build .#default
+
+      - name: Verify binary
+        run: |
+          ./result/bin/cosmic-comp --version
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosmic-comp-traffic
+          path: result/bin/cosmic-comp
+          retention-days: 7
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cosmic-comp-traffic
+          path: bin/
+
+      - name: Make executable
+        run: chmod +x bin/cosmic-comp
+
+      - name: Run basic test
+        run: ./bin/cosmic-comp --version

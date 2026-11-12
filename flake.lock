@@ -1,21 +1,5 @@
 {
   "nodes": {
-    "crane": {
-      "locked": {
-        "lastModified": 1724974107,
-        "narHash": "sha256-69+1W0Ao5K9su569YUfUPANeN/Ea7aKu7xIZP1MSl9o=",
-        "owner": "ipetkov",
-        "repo": "crane",
-        "rev": "63396562b8e08efda3b3c66e32661b8a513055de",
-        "type": "github"
-      },
-      "original": {
-        "owner": "ipetkov",
-        "repo": "crane",
-        "rev": "63396562b8e08efda3b3c66e32661b8a513055de",
-        "type": "github"
-      }
-    },
     "nix-filter": {
       "locked": {
         "lastModified": 1791915028,
@@ -69,7 +53,6 @@
     },
     "root": {
       "inputs": {
-        "crane": "crane",
         "nix-filter": "nix-filter",
         "nixpkgs": "nixpkgs",
         "parts": "parts",

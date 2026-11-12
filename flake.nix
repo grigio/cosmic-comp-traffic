@@ -7,9 +7,6 @@
     parts.url = "github:hercules-ci/flake-parts";
     parts.inputs.nixpkgs-lib.follows = "nixpkgs";
 
-    crane.url = "github:ipetkov/crane/63396562b8e08efda3b3c66e32661b8a513055de";
-    crane.inputs.nixpkgs.follows = "nixpkgs";
-
     rust.url = "github:oxalica/rust-overlay";
     rust.inputs.nixpkgs.follows = "nixpkgs";
 
@@ -21,15 +18,14 @@
     self,
     nixpkgs,
     parts,
-    crane,
     rust,
     nix-filter,
     ...
   }: let
-    # Allow overriding cargoVendorDir from file (for CI)
-    cargoVendorDir =
-      if builtins.pathExists ./cargoVendorDir.nix
-      then (import ./cargoVendorDir.nix)
+    # Allow overriding cargoVendorHash from file (for CI)
+    cargoVendorHash =
+      if builtins.pathExists ./cargoVendorHash.nix
+      then (import ./cargoVendorHash.nix)
       else null;
   in
     parts.lib.mkFlake {inherit inputs;} {
@@ -45,78 +41,27 @@
         ...
       }: let
         pkgs = nixpkgs.legacyPackages.${system}.extend rust.overlays.default;
-        rust-toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
-        craneLib = (crane.mkLib pkgs).overrideToolchain rust-toolchain;
+
+        # Use libdisplay-info_0_3 like nixpkgs cosmic-comp package
+        libdisplay-info = pkgs.libdisplay-info_0_3;
 
         # System dependencies needed at build time for pkg-config
         sysDeps = with pkgs; [
           libdisplay-info
           wayland
-          systemd
-          seatd
-          libxkbcommon
+          libgbm
           libinput
-          mesa
-          fontconfig
           pixman
-          dbus
-          glib
-          gsettings-desktop-schemas
-          librsvg
-          libpng
-          libjpeg_turbo
-          libwebp
-          alsa-lib
-          freepats
-          libXi
-          libXrandr
-          libXfixes
-          libXext
-          libXdamage
-          libXcomposite
-          libXrender
-          libXxf86vm
-          libxcb
-          vulkan-loader
+          seatd
+          udev
+          libxkbcommon
         ];
 
-        # Custom cargoDeps that includes system deps in depsHostHost
-        cargoDeps = craneLib.buildDepsOnly {
-          pname = "cosmic-comp-traffic-deps";
-          version = self.rev or "dirty";
-          src = nix-filter.lib.filter {
-            root = ./.;
-            include = [
-              ./src
-              ./cosmic-comp-config
-              ./data
-              ./resources
-              ./i18n.toml
-              ./Cargo.toml
-              ./Cargo.lock
-              ./rust-toolchain.toml
-              ./rustfmt.toml
-              ./build.rs
-              ./justfile
-            ];
-          };
-          nativeBuildInputs = with pkgs; [
-            pkg-config
-            autoPatchelfHook
-            cmake
-            just
-            libdisplay-info
-          ];
-          buildInputs = with pkgs; [
-            libdisplay-info
-          ];
-          # This ensures system deps are in depsHostHost for pkg-config
-          depsHostHost = sysDeps;
-          doCheck = false;
-          strictDeps = false;
-        };
+        # PKG_CONFIG_PATH for libdisplay-info
+        libdisplay-info-pkgconfig = builtins.toString (libdisplay-info.outPath + "/lib/pkgconfig");
 
-        craneArgs = {
+        # Use rustPlatform.buildRustPackage like nixpkgs cosmic-comp package
+        cosmic-comp-traffic = pkgs.rustPlatform.buildRustPackage {
           pname = "cosmic-comp-traffic";
           version = self.rev or "dirty";
 
@@ -134,73 +79,39 @@
               ./rustfmt.toml
               ./build.rs
               ./justfile
+              ./cargo.just
             ];
           };
 
+          cargoHash = "sha256-zIckNtQgphFq/mbWJNE+Am5iWxhKViUT7DKBiy9Jwfs=";
+
           nativeBuildInputs = with pkgs; [
             pkg-config
-            autoPatchelfHook
-            cmake
             just
-            libdisplay-info
           ];
 
-          buildInputs = with pkgs; [
-            wayland
-            systemd # For libudev
-            seatd # For libseat
-            libxkbcommon
-            libinput
-            mesa # For libgbm
-            fontconfig
-            stdenv.cc.cc.lib
-            pixman
-            libdisplay-info
-            dbus
-            glib
-            gsettings-desktop-schemas
-            librsvg
-            libpng
-            libjpeg_turbo
-            libwebp
-            alsa-lib
-            freepats
-            libXi
-            libXrandr
-            libXfixes
-            libXext
-            libXdamage
-            libXcomposite
-            libXrender
-            libXxf86vm
-            libxcb
-            vulkan-loader
-          ];
+          buildInputs = sysDeps;
 
-          propagatedBuildInputs = with pkgs; [
-            libdisplay-info
-          ];
+          # Set PKG_CONFIG_PATH for cargo build
+          preConfigure = ''
+            export PKG_CONFIG_PATH="${libdisplay-info-pkgconfig}:$PKG_CONFIG_PATH"
+          '';
 
-          runtimeDependencies = with pkgs; [
-            libglvnd # For libEGL
-            wayland # winit->wayland-sys wants to dlopen libwayland-egl.so
-            # for running in X11
-            libx11
-            libxcursor
-            libxcb
-            libxi
-            libxkbcommon
-            # for vulkan backend
-            vulkan-loader
-          ];
+          # Use just for building
+          dontUseJustBuild = true;
+          dontUseJustCheck = true;
 
-          inherit cargoVendorDir cargoDeps;
+          justFlags = [
+            "--set"
+            "prefix"
+            (placeholder "out")
+            "--set"
+            "cargo-target-dir"
+            "target/${pkgs.stdenv.hostPlatform.rust.cargoShortTarget}"
+          ];
 
           doCheck = false;
-          strictDeps = false;
         };
-
-        cosmic-comp-traffic = craneLib.buildPackage craneArgs;
       in {
         apps.cosmic-comp-traffic = {
           type = "app";
@@ -210,13 +121,9 @@
         checks.cosmic-comp-traffic = cosmic-comp-traffic;
         packages.default = cosmic-comp-traffic;
 
-        devShells.default = craneLib.devShell {
-          LD_LIBRARY_PATH = lib.makeLibraryPath (
-            __concatMap (d: d.runtimeDependencies) (__attrValues self'.checks)
-          );
-
-          # include build inputs
-          inputsFrom = [cosmic-comp-traffic];
+        devShells.default = pkgs.mkShell {
+          buildInputs = [ cosmic-comp-traffic ] ++ sysDeps;
+          LD_LIBRARY_PATH = lib.makeLibraryPath sysDeps;
         };
       };
     };
