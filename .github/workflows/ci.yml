@@ -91,7 +91,12 @@ jobs:
             sandbox = false
             extra-experimental-features = nix-command flakes
 
-      - name: Flake check
+      - name: Vendor cargo dependencies
+        run: |
+          cargo vendor --versioned-dirs --manifest-path Cargo.toml
+          echo "./vendor" > cargoVendorDir.nix
+
+      - name: Flake check (with vendored deps)
         run: nix build .#default --print-build-logs
 
       - name: Flake dev-shell check

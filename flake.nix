@@ -26,10 +26,10 @@
     nix-filter,
     ...
   }: let
-    # Allow overriding cargoVendorDir from external (e.g., CI)
+    # Read cargoVendorDir from file if exists (for CI), otherwise null
     cargoVendorDir =
-      if self ? cargoVendorDir
-      then self.cargoVendorDir
+      if builtins.pathExists ./cargoVendorDir.nix
+      then (import ./cargoVendorDir.nix)
       else null;
   in
     parts.lib.mkFlake {inherit inputs;} {
