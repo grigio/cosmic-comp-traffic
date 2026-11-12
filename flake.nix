@@ -25,7 +25,13 @@
     rust,
     nix-filter,
     ...
-  }:
+  }: let
+    # Allow overriding cargoVendorDir from external (e.g., CI)
+    cargoVendorDir =
+      if self ? cargoVendorDir
+      then self.cargoVendorDir
+      else null;
+  in
     parts.lib.mkFlake {inherit inputs;} {
       systems = [
         "aarch64-linux"
@@ -41,13 +47,6 @@
         pkgs = nixpkgs.legacyPackages.${system}.extend rust.overlays.default;
         rust-toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
         craneLib = (crane.mkLib pkgs).overrideToolchain rust-toolchain;
-
-        # Allow overriding cargoVendorDir from CI (for vendored dependencies)
-        cargoVendorDir =
-          if self ? cargoVendorDir
-          then self.cargoVendorDir
-          else null;
-
         craneArgs = {
           pname = "cosmic-comp-traffic";
           version = self.rev or "dirty";

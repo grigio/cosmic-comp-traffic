@@ -99,24 +99,22 @@ jobs:
         run: |
           nix build --impure --expr '
             let
-              flake = import ./flake.nix;
-              pkgs = import <nixpkgs> {};
-              # Override the flake to use our vendored dependencies
-              overridden = flake // {
-                cargoVendorDir = ./vendor;
-              };
+              pkgs = import <nixpkgs> { };
+              flake = import ./flake.nix { inherit pkgs; };
             in
-            (overridden.packages.x86_64-linux.default)
+            flake.packages.x86_64-linux.default.overrideAttrs (old: {
+              cargoVendorDir = ./vendor;
+            })
           ' --print-build-logs
 
       - name: Flake dev-shell check
         run: |
           nix shell --impure --expr '
             let
-              flake = import ./flake.nix;
-              overridden = flake // {
-                cargoVendorDir = ./vendor;
-              };
+              pkgs = import <nixpkgs> { };
+              flake = import ./flake.nix { inherit pkgs; };
             in
-            overridden.devShells.x86_64-linux.default
+            flake.devShells.x86_64-linux.default.overrideAttrs (old: {
+              cargoVendorDir = ./vendor;
+            })
           '
