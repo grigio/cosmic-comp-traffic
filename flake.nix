@@ -26,7 +26,7 @@
     nix-filter,
     ...
   }: let
-    # Read cargoVendorDir from file if exists (for CI), otherwise null
+    # Allow overriding cargoVendorDir from file (for CI)
     cargoVendorDir =
       if builtins.pathExists ./cargoVendorDir.nix
       then (import ./cargoVendorDir.nix)
@@ -47,6 +47,75 @@
         pkgs = nixpkgs.legacyPackages.${system}.extend rust.overlays.default;
         rust-toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
         craneLib = (crane.mkLib pkgs).overrideToolchain rust-toolchain;
+
+        # System dependencies needed at build time for pkg-config
+        sysDeps = with pkgs; [
+          libdisplay-info
+          wayland
+          systemd
+          seatd
+          libxkbcommon
+          libinput
+          mesa
+          fontconfig
+          pixman
+          dbus
+          glib
+          gsettings-desktop-schemas
+          librsvg
+          libpng
+          libjpeg_turbo
+          libwebp
+          alsa-lib
+          freepats
+          libXi
+          libXrandr
+          libXfixes
+          libXext
+          libXdamage
+          libXcomposite
+          libXrender
+          libXxf86vm
+          libxcb
+          vulkan-loader
+        ];
+
+        # Custom cargoDeps that includes system deps in depsHostHost
+        cargoDeps = craneLib.buildDepsOnly {
+          pname = "cosmic-comp-traffic-deps";
+          version = self.rev or "dirty";
+          src = nix-filter.lib.filter {
+            root = ./.;
+            include = [
+              ./src
+              ./cosmic-comp-config
+              ./data
+              ./resources
+              ./i18n.toml
+              ./Cargo.toml
+              ./Cargo.lock
+              ./rust-toolchain.toml
+              ./rustfmt.toml
+              ./build.rs
+              ./justfile
+            ];
+          };
+          nativeBuildInputs = with pkgs; [
+            pkg-config
+            autoPatchelfHook
+            cmake
+            just
+            libdisplay-info
+          ];
+          buildInputs = with pkgs; [
+            libdisplay-info
+          ];
+          # This ensures system deps are in depsHostHost for pkg-config
+          depsHostHost = sysDeps;
+          doCheck = false;
+          strictDeps = false;
+        };
+
         craneArgs = {
           pname = "cosmic-comp-traffic";
           version = self.rev or "dirty";
@@ -125,7 +194,7 @@
             vulkan-loader
           ];
 
-          inherit cargoVendorDir;
+          inherit cargoVendorDir cargoDeps;
 
           doCheck = false;
           strictDeps = false;
