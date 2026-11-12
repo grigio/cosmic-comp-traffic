@@ -261,6 +261,7 @@ fn read_table(fd: OwnedFd, size: u32) -> std::io::Result<Vec<u16>> {
     let mut file = File::from(fd);
     let mut raw = vec![0u8; size as usize * 3 * 2];
     file.read_exact(&mut raw)?;
+    #[allow(clippy::chunks_exact_to_as_chunks)]
     Ok(raw
         .chunks_exact(2)
         .map(|pair| u16::from_ne_bytes([pair[0], pair[1]]))
