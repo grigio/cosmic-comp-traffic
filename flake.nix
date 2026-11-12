@@ -80,6 +80,7 @@
             fontconfig
             stdenv.cc.cc.lib
             pixman
+            libdisplay-info
             dbus
             glib
             gsettings-desktop-schemas
