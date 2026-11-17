@@ -142,6 +142,9 @@ inherits = "release"
 [profile.release]
 lto = "fat"
 
+[profile.rpm]
+inherits = "release"
+
 [patch.crates-io]
 smithay = { git = "https://github.com/smithay/smithay.git", rev = "8a270232f1bfc416c781273c98a3f52a812a0bba" }
 smithay-egui = { git = "https://github.com/Smithay/smithay-egui.git", rev = "6511552" }
