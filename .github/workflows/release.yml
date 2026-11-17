@@ -260,9 +260,9 @@ jobs:
       - name: Install build dependencies
         run: |
           dnf install -y \
-            cargo rust gcc git just lld \
+            cargo rust gcc just lld \
             libdisplay-info-devel wayland-devel libinput-devel pixman-devel \
-            mesa-libgbm-devel libxkbcommon-devel seatd-devel systemd-devel \
+            mesa-libgbm-devel libxkbcommon-devel libseat-devel systemd-devel \
             pkgconfig rpm-build rpm-sign dnf-plugins-core
 
       - name: Create build user
