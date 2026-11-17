@@ -265,13 +265,10 @@ jobs:
             mesa-libgbm-devel libxkbcommon-devel libseat-devel systemd-devel \
             pkgconfig rpm-build rpm-sign dnf-plugins-core rust-packaging
 
-      - name: Install Rust toolchain
+      - name: Create build user
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-          source "$HOME/.cargo/env"
-          rustup toolchain install stable --component rust-src
-          rustup default stable
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
 
       - name: Install Rust toolchain for builder user
         run: |
@@ -281,11 +278,6 @@ jobs:
             rustup toolchain install stable --component rust-src
             rustup default stable
           '
-
-      - name: Create build user
-        run: |
-          useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
 
       - name: Cache cargo registry
         uses: actions/cache@v4
