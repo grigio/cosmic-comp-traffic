@@ -479,7 +479,7 @@ jobs:
             {{PATCH_LIST}}
 
             Revert with `sudo pacman -S cosmic-comp` (Arch) or `sudo dnf install cosmic-comp` (Fedora).
-            EOF
+          EOF
             )
             # Replace template variables
             notes="${notes//\{\{UPSTREAM_REPO\}\}/$UPSTREAM_REPO}"
