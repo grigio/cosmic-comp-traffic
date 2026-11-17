@@ -1,6 +1,10 @@
 Name:           cosmic-comp-traffic
 Version:        %{version}
-Release:        1%{?dist}
+# The CI passes -D "cosmic_release N" derived from the commit count; keep a
+# default for local builds. This must match the release number the publish
+# step uses when pruning older assets.
+%{!?cosmic_release: %define cosmic_release 1}
+Release:        %{cosmic_release}%{?dist}
 Summary:        Compositor for the COSMIC desktop environment with macOS-style traffic-light decorations
 
 License:        GPL-3.0-only

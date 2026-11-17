@@ -332,7 +332,7 @@ jobs:
             "cd /home/builder/rpmbuild && rpmbuild -ba \
               --define \"_topdir /home/builder/rpmbuild\" \
               --define \"version $VERSION\" \
-              --define \"release $release%{?dist}\" \
+              --define \"cosmic_release $release\" \
               SPECS/cosmic-comp-traffic.spec"
 
       - name: Collect RPM packages
@@ -400,16 +400,23 @@ jobs:
           assets=()
           for file in arch-artifacts/*.pkg.tar.zst; do
             [ -e "$file" ] || continue
+            # The Arch job already stripped the epoch separator from the asset
+            # name (GitHub disallows ':'), so only rename when it is still
+            # present. Otherwise mv tries to rename the file to itself.
             asset="${file/1:/}"
-            mv "$file" "$asset"
-            mv "$file.sha256" "$asset.sha256"
+            if [[ "$asset" != "$file" ]]; then
+              mv "$file" "$asset"
+              mv "$file.sha256" "$asset.sha256"
+            fi
             assets+=("$asset" "$asset.sha256")
           done
           for file in rpm-artifacts/*.rpm; do
             [ -e "$file" ] || continue
+            base=$(basename "$file")
             mv "$file" .
             mv "$file.sha256" .
-            assets+=("$file" "$file.sha256")
+            # Use the basename: the file was just moved out of rpm-artifacts/.
+            assets+=("$base" "$base.sha256")
           done
           (( ${#assets[@]} )) || { echo "no packages were produced" >&2; exit 1; }
           printf '%s\n' "${assets[@]}" > /tmp/assets.txt
@@ -572,7 +579,7 @@ jobs:
           import os, re, sys
 
           pattern = re.compile(
-              r"^(cosmic-comp-traffic(-debuginfo)?-)"
+              r"^(cosmic-comp-traffic(-debuginfo|-debugsource)?-)"
               + re.escape(os.environ["VERSION"])
               + r"-(\d+)(\..*)?\.rpm(\.sha256)?$"
           )
