@@ -137,6 +137,10 @@ for tag in "${tags[@]}"; do
     fi
 
     if (( fmt )); then
+      # The upstream tag pins its own toolchain (e.g. 1.93), which is not the
+      # one `rustup component add rustfmt` at the repo root installed for.
+      # Install rustfmt for whichever toolchain this worktree resolves to.
+      rustup component add rustfmt
       cargo fmt --all -- --check
     fi
   )

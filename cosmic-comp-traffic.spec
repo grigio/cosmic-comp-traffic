@@ -16,6 +16,7 @@ Patch4:         0005-wlr-gamma-control.patch
 Patch5:         0006-live-theme-reload.patch
 Patch6:         0007-send-frames-missing-workspace-set.patch
 Patch7:         0008-output-removal-without-unwrap.patch
+Patch8:         0009-clippy-needless-bool.patch
 
 BuildRequires:  cargo
 BuildRequires:  rust
@@ -72,10 +73,14 @@ export CARGO_BUILD_FROZEN=true
 %cargo_build
 
 %install
-%cargo_install
+# %cargo_install is intentionally NOT used: it runs `cargo install --path .`,
+# which ignores Cargo.lock and re-resolves every git dependency to its newest
+# commit. That pulls a libcosmic without CosmicTk::icon_theme and breaks the
+# build. %cargo_build above already compiled the binary against the locked
+# dependencies, so copy that binary into place directly.
+install -Dm0755 target/rpm/cosmic-comp %{buildroot}%{_bindir}/cosmic-comp
 
 # Install additional data files
-install -Dm0755 target/release/cosmic-comp %{buildroot}%{_bindir}/cosmic-comp
 install -Dm0644 data/keybindings.ron %{buildroot}%{_datadir}/cosmic/com.system76.CosmicSettings.Shortcuts/v1/defaults/keybindings.ron
 install -Dm0644 data/tiling-exceptions.ron %{buildroot}%{_datadir}/cosmic/com.system76.CosmicSettings.WindowRules/v1/tiling_exception_defaults/tiling-exceptions.ron
 install -Dm0644 data/cosmic.desktop %{buildroot}%{_datadir}/wayland-sessions/cosmic.desktop

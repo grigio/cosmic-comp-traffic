@@ -122,7 +122,7 @@
         packages.default = cosmic-comp-traffic;
 
         devShells.default = pkgs.mkShell {
-          buildInputs = [ cosmic-comp-traffic ] ++ sysDeps;
+          buildInputs = [cosmic-comp-traffic] ++ sysDeps;
           LD_LIBRARY_PATH = lib.makeLibraryPath sysDeps;
         };
       };
