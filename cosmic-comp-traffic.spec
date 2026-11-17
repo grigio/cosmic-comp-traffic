@@ -63,7 +63,8 @@ cargo fetch --locked
 %build
 export RUSTFLAGS="${RUSTFLAGS} -C link-arg=-fuse-ld=lld"
 export CARGO_BUILD_RELEASE=true
-%cargo_build --frozen
+export CARGO_BUILD_FROZEN=true
+%cargo_build
 
 %install
 %cargo_install
