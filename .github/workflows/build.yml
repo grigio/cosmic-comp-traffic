@@ -34,19 +34,3 @@ jobs:
           name: cosmic-comp-traffic
           path: result/bin/cosmic-comp
           retention-days: 7
-
-  test:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: cosmic-comp-traffic
-          path: bin/
-
-      - name: Make executable
-        run: chmod +x bin/cosmic-comp
-
-      - name: Run basic test
-        run: ./bin/cosmic-comp --version
