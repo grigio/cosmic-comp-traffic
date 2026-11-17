@@ -263,7 +263,7 @@ jobs:
             cargo rust gcc just lld \
             libdisplay-info-devel wayland-devel libinput-devel pixman-devel \
             mesa-libgbm-devel libxkbcommon-devel libseat-devel systemd-devel \
-            pkgconfig rpm-build rpm-sign dnf-plugins-core
+            pkgconfig rpm-build rpm-sign dnf-plugins-core rust-packaging
 
       - name: Create build user
         run: |
@@ -299,6 +299,9 @@ jobs:
         run: |
           cp "$GITHUB_WORKSPACE/cosmic-comp-traffic.spec" /home/builder/rpmbuild/SPECS/
           cp "$GITHUB_WORKSPACE/patches/common"/*.patch /home/builder/rpmbuild/SOURCES/
+          # Replace build date placeholder with current date in RPM format
+          build_date=$(date +"%a %b %d %Y")
+          sed -i "s/@@BUILD_DATE@@/$build_date/" /home/builder/rpmbuild/SPECS/cosmic-comp-traffic.spec
           chown -R builder:builder /home/builder/rpmbuild
 
       - name: Build RPM package

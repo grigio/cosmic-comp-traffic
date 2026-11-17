@@ -27,7 +27,7 @@ BuildRequires:  libinput-devel
 BuildRequires:  pixman-devel
 BuildRequires:  mesa-libgbm-devel
 BuildRequires:  libxkbcommon-devel
-BuildRequires:  seatd-devel
+BuildRequires:  libseat-devel
 BuildRequires:  systemd-devel
 BuildRequires:  pkgconfig
 BuildRequires:  just
@@ -38,11 +38,11 @@ Requires:       libinput%{?_isa}
 Requires:       pixman%{?_isa}
 Requires:       mesa-libgbm%{?_isa}
 Requires:       libxkbcommon%{?_isa}
-Requires:       seatd%{?_isa}
+Requires:       libseat%{?_isa}
 
 Provides:       cosmic-comp = %{version}-%{release}
 Conflicts:      cosmic-comp
-Obsoletes:      cosmic-comp
+Obsoletes:      cosmic-comp < %{version}-%{release}
 
 %description
 Compositor for the COSMIC desktop environment with macOS-style traffic-light
@@ -90,5 +90,5 @@ install -Dm0755 data/cosmic-service %{buildroot}%{_bindir}/cosmic-service
 %{_libdir}/systemd/user/cosmic-comp.service
 
 %changelog
-* %{_date} Grigio <grigio.org> - %{version}-%{release}
+* @@BUILD_DATE@@ Grigio <grigio.org> - %{version}-%{release}
 - Initial package for Fedora
