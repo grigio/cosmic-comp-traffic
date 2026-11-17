@@ -5,7 +5,7 @@ Summary:        Compositor for the COSMIC desktop environment with macOS-style t
 
 License:        GPL-3.0-only
 URL:            https://github.com/grigio/cosmic-comp-traffic
-Source0:        https://github.com/pop-os/cosmic-comp/archive/refs/tags/epoch-%{version}.tar.gz
+Source0:        https://github.com/pop-os/cosmic-comp/archive/refs/tags/epoch-%{version}.tar.gz#/cosmic-comp-epoch-%{version}.tar.gz
 
 # Patches from the cosmic-comp-traffic fork (copied to SOURCES by the build script)
 Patch0:         0001-macos-traffic-light-decorations.patch
