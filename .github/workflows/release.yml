@@ -285,9 +285,11 @@ jobs:
           path: |
             /home/builder/.cargo/registry
             /home/builder/.cargo/git
-          key: cargo-rpm-${{ matrix.tag }}-${{ github.run_id }}
+          # Stable key so a successful build is actually restored next time.
+          # The old key used github.run_id, which is unique per run and made
+          # every RPM build re-download all cargo dependencies from scratch.
+          key: cargo-rpm-${{ matrix.tag }}
           restore-keys: |
-            cargo-rpm-${{ matrix.tag }}-
             cargo-rpm-
 
       - name: Set up rpmbuild directories

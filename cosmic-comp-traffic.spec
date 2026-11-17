@@ -66,6 +66,13 @@ fi
 # Fetch cargo dependencies
 cargo fetch --locked
 
+# The cargo-build macro forces CARGO_HOME=.cargo inside the build directory,
+# which would re-download everything even though the CI cache lives in
+# $HOME/.cargo. Point .cargo at that cache so the downloads are reused.
+if [ -d "$HOME/.cargo" ] && [ ! -e .cargo ]; then
+  ln -s "$HOME/.cargo" .cargo
+fi
+
 %build
 export RUSTFLAGS="${RUSTFLAGS} -C link-arg=-fuse-ld=lld"
 export CARGO_BUILD_RELEASE=true
@@ -73,11 +80,12 @@ export CARGO_BUILD_FROZEN=true
 %cargo_build
 
 %install
-# %cargo_install is intentionally NOT used: it runs `cargo install --path .`,
-# which ignores Cargo.lock and re-resolves every git dependency to its newest
-# commit. That pulls a libcosmic without CosmicTk::icon_theme and breaks the
-# build. %cargo_build above already compiled the binary against the locked
-# dependencies, so copy that binary into place directly.
+# The RPM cargo-install macro is deliberately not used: it runs
+# "cargo install --path .", which ignores Cargo.lock and re-resolves every git
+# dependency to its newest commit. That pulls a libcosmic without
+# CosmicTk::icon_theme and breaks the build. The cargo-build macro above already
+# compiled the binary against the locked dependencies, so copy that binary
+# into place directly.
 install -Dm0755 target/rpm/cosmic-comp %{buildroot}%{_bindir}/cosmic-comp
 
 # Install additional data files
