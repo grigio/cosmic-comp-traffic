@@ -85,7 +85,7 @@ inputs.cosmic-comp-traffic.url = "github:grigio/cosmic-comp-traffic";
 }
 ```
 
-### Arch Linux (AUR)
+### Arch Linux
 
 Packages are built automatically for each upstream release and published to GitHub Releases. Install with:
 
@@ -97,6 +97,19 @@ sudo pacman -U ./*.pkg.tar.zst
 ```
 
 The package is called `cosmic-comp-traffic`, provides/conflicts/replaces `cosmic-comp`, and installs the same files to the same paths.
+
+### Fedora
+
+RPM packages are also built automatically for each upstream release and published to GitHub Releases. Install with:
+
+```bash
+# Download latest release
+gh release download -R grigio/cosmic-comp-traffic -p 'cosmic-comp-traffic-*.rpm*' -D /tmp/cosmic-comp-traffic
+cd /tmp/cosmic-comp-traffic && sha256sum -c ./*.rpm.sha256
+sudo dnf install ./*.rpm
+```
+
+The package is called `cosmic-comp-traffic`, provides/conflicts/obsoletes `cosmic-comp`, and installs the same files to the same paths.
 
 ## Development
 

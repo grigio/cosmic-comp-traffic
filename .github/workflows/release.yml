@@ -1,18 +1,16 @@
-name: Arch package
+name: Release packages
 
-# Builds an Arch Linux package of cosmic-comp for every upstream release tag
-# (epoch-X.Y.Z), with the patches in patches/ applied on top, and attaches it
-# to a GitHub release named after the upstream tag.
+# Builds Arch Linux and Fedora RPM packages of cosmic-comp for every upstream
+# release tag (epoch-X.Y.Z), with the patches in patches/ applied on top, and
+# attaches them to a GitHub release named after the upstream tag.
 #
 # Triggers
 #   schedule         every 6 hours: build every tag >= MIN_VERSION that has no
 #                    release yet (i.e. new upstream releases get picked up
 #                    automatically, failed builds are retried)
 #   workflow_dispatch build one specific tag, or every missing one
-#   push to master    PKGBUILD / patches / this file changed: rebuild the newest
-#                    tag and overwrite its release (pkgrel is derived from the
-#                    number of commits touching PKGBUILD+patches, so pacman sees
-#                    it as an upgrade)
+#   push to master    PKGBUILD / patches / spec / this file changed: rebuild the
+#                    newest tag and overwrite its release
 
 on:
   schedule:
@@ -32,6 +30,7 @@ on:
     branches: [master]
     paths:
       - PKGBUILD
+      - cosmic-comp-traffic.spec
       - 'patches/**'
       - '.github/workflows/release.yml'
 
@@ -39,7 +38,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: arch-package
+  group: release-packages
   cancel-in-progress: false
 
 env:
@@ -128,8 +127,8 @@ jobs:
           print(f"{len(matrix)} build(s): {json.dumps(matrix)}")
           PY
 
-  build:
-    name: ${{ matrix.tag }}
+  build-arch:
+    name: Arch - ${{ matrix.tag }}
     needs: discover
     if: needs.discover.outputs.count != '0'
     runs-on: ubuntu-latest
@@ -170,12 +169,12 @@ jobs:
           path: |
             /home/builder/.cargo/registry
             /home/builder/.cargo/git
-          key: cargo-${{ matrix.tag }}-${{ github.run_id }}
+          key: cargo-arch-${{ matrix.tag }}-${{ github.run_id }}
           restore-keys: |
-            cargo-${{ matrix.tag }}-
-            cargo-
+            cargo-arch-${{ matrix.tag }}-
+            cargo-arch-
 
-      - name: Build package
+      - name: Build Arch package
         env:
           COSMIC_COMP_VERSION: ${{ matrix.version }}
         run: |
@@ -209,7 +208,7 @@ jobs:
 
           cp /tmp/pkgout/*.pkg.tar.zst "$GITHUB_WORKSPACE/"
 
-      - name: Collect packages
+      - name: Collect Arch packages
         id: pkg
         run: |
           set -euo pipefail
@@ -224,6 +223,181 @@ jobs:
             assets+=("$asset" "$asset.sha256")
           done
           (( ${#assets[@]} )) || { echo "no package was produced" >&2; exit 1; }
+          printf '%s\n' "${assets[@]}" > /tmp/assets-arch.txt
+          cat /tmp/assets-arch.txt
+
+      - name: Upload Arch artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-packages-${{ matrix.tag }}
+          path: |
+            *.pkg.tar.zst
+            *.pkg.tar.zst.sha256
+          retention-days: 7
+
+  build-rpm:
+    name: Fedora RPM - ${{ matrix.tag }}
+    needs: discover
+    if: needs.discover.outputs.count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    container:
+      image: fedora:latest
+      options: --privileged
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    steps:
+      - name: Bootstrap git
+        run: dnf install -y git
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          dnf install -y \
+            cargo rust gcc git just lld \
+            libdisplay-info-devel wayland-devel libinput-devel pixman-devel \
+            mesa-libgbm-devel libxkbcommon-devel seatd-devel systemd-devel \
+            pkgconfig rpm-build rpm-sign dnf-plugins-core
+
+      - name: Create build user
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/builder/.cargo/registry
+            /home/builder/.cargo/git
+          key: cargo-rpm-${{ matrix.tag }}-${{ github.run_id }}
+          restore-keys: |
+            cargo-rpm-${{ matrix.tag }}-
+            cargo-rpm-
+
+      - name: Set up rpmbuild directories
+        run: |
+          mkdir -p /home/builder/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          chown -R builder:builder /home/builder/rpmbuild
+
+      - name: Download upstream source tarball
+        env:
+          VERSION: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          cd /home/builder/rpmbuild/SOURCES
+          curl -L -o "cosmic-comp-epoch-${VERSION}.tar.gz" \
+            "https://github.com/pop-os/cosmic-comp/archive/refs/tags/epoch-${VERSION}.tar.gz"
+
+      - name: Copy spec file and patches
+        run: |
+          cp "$GITHUB_WORKSPACE/cosmic-comp-traffic.spec" /home/builder/rpmbuild/SPECS/
+          cp "$GITHUB_WORKSPACE/patches/common"/*.patch /home/builder/rpmbuild/SOURCES/
+          chown -R builder:builder /home/builder/rpmbuild
+
+      - name: Build RPM package
+        env:
+          VERSION: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          # Calculate release number from commit count (similar to pkgrel)
+          release=$(git rev-list --count HEAD -- cosmic-comp-traffic.spec patches .github/workflows/release.yml)
+          (( release >= 1 )) || release=1
+          echo "building cosmic-comp-traffic $VERSION (release $release)"
+
+          su builder -s /bin/bash -c \
+            "cd /home/builder/rpmbuild && rpmbuild -ba \
+              --define \"_topdir /home/builder/rpmbuild\" \
+              --define \"version $VERSION\" \
+              --define \"release $release%{?dist}\" \
+              SPECS/cosmic-comp-traffic.spec"
+
+      - name: Collect RPM packages
+        id: pkg
+        run: |
+          set -euo pipefail
+          cd /home/builder/rpmbuild/RPMS/x86_64
+          shopt -s nullglob
+          assets=()
+          for file in *.rpm; do
+            sha256sum "$file" > "$file.sha256"
+            assets+=("$file" "$file.sha256")
+          done
+          (( ${#assets[@]} )) || { echo "no RPM package was produced" >&2; exit 1; }
+          printf '%s\n' "${assets[@]}" > /tmp/assets-rpm.txt
+          cat /tmp/assets-rpm.txt
+
+      - name: Copy RPM packages to workspace
+        run: |
+          cp /home/builder/rpmbuild/RPMS/x86_64/*.rpm "$GITHUB_WORKSPACE/"
+          cp /home/builder/rpmbuild/RPMS/x86_64/*.rpm.sha256 "$GITHUB_WORKSPACE/"
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-packages-${{ matrix.tag }}
+          path: |
+            *.rpm
+            *.rpm.sha256
+          retention-days: 7
+
+  publish:
+    name: Publish release - ${{ matrix.tag }}
+    needs: [discover, build-arch, build-rpm]
+    if: needs.discover.outputs.count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Arch artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: arch-packages-${{ matrix.tag }}
+          path: arch-artifacts/
+
+      - name: Download RPM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: rpm-packages-${{ matrix.tag }}
+          path: rpm-artifacts/
+
+      - name: Collect all assets
+        id: assets
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          assets=()
+          for file in arch-artifacts/*.pkg.tar.zst; do
+            [ -e "$file" ] || continue
+            asset="${file/1:/}"
+            mv "$file" "$asset"
+            mv "$file.sha256" "$asset.sha256"
+            assets+=("$asset" "$asset.sha256")
+          done
+          for file in rpm-artifacts/*.rpm; do
+            [ -e "$file" ] || continue
+            mv "$file" .
+            mv "$file.sha256" .
+            assets+=("$file" "$file.sha256")
+          done
+          (( ${#assets[@]} )) || { echo "no packages were produced" >&2; exit 1; }
           printf '%s\n' "${assets[@]}" > /tmp/assets.txt
           cat /tmp/assets.txt
 
@@ -259,33 +433,47 @@ jobs:
             echo "release $TAG exists, uploading assets"
             gh release upload "$TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
           else
-            notes=$(cat <<EOF
-          Arch Linux package of upstream [cosmic-comp](https://github.com/$UPSTREAM_REPO) \`$TAG\`
-          with the patches from this fork applied on top.
+            notes=$(cat <<'EOF'
+            Arch Linux and Fedora RPM packages of upstream [cosmic-comp](https://github.com/{{UPSTREAM_REPO}}) `{{TAG}}`
+            with the patches from this fork applied on top.
 
-          ### Install
+            ### Install
 
-          \`\`\`sh
-          gh release download $TAG -R $GITHUB_REPOSITORY -p 'cosmic-comp-traffic-[0-9]*.pkg.tar.zst*' -D /tmp/cosmic-comp-traffic
-          cd /tmp/cosmic-comp-traffic && sha256sum -c ./*.pkg.tar.zst.sha256
-          sudo pacman -U ./*.pkg.tar.zst
-          \`\`\`
+            **Arch Linux:**
+            ```sh
+            gh release download {{TAG}} -R {{GITHUB_REPOSITORY}} -p 'cosmic-comp-traffic-[0-9]*.pkg.tar.zst*' -D /tmp/cosmic-comp-traffic
+            cd /tmp/cosmic-comp-traffic && sha256sum -c ./*.pkg.tar.zst.sha256
+            sudo pacman -U ./*.pkg.tar.zst
+            ```
 
-          or simply \`./scripts/install-latest.sh $TAG\`.
+            **Fedora:**
+            ```sh
+            gh release download {{TAG}} -R {{GITHUB_REPOSITORY}} -p 'cosmic-comp-traffic-*.rpm*' -D /tmp/cosmic-comp-traffic
+            cd /tmp/cosmic-comp-traffic && sha256sum -c ./*.rpm.sha256
+            sudo dnf install ./*.rpm
+            ```
 
-          The package is called \`cosmic-comp-traffic\`, provides/conflicts/replaces
-          \`cosmic-comp\`, and installs the same files to the same paths, so it is a
-          drop-in replacement. Takes effect at the next login.
+            or simply `./scripts/install-latest.sh {{TAG}}`.
 
-          ### Patches
+            The package is called `cosmic-comp-traffic`, provides/conflicts/replaces
+            `cosmic-comp`, and installs the same files to the same paths, so it is a
+            drop-in replacement. Takes effect at the next login.
 
-          Applied at build time:
+            ### Patches
 
-          $patch_list
+            Applied at build time:
 
-          Revert with \`sudo pacman -S cosmic-comp\`.
-          EOF
+            {{PATCH_LIST}}
+
+            Revert with `sudo pacman -S cosmic-comp` (Arch) or `sudo dnf install cosmic-comp` (Fedora).
+            EOF
             )
+            # Replace template variables
+            notes="${notes//\{\{UPSTREAM_REPO\}\}/$UPSTREAM_REPO}"
+            notes="${notes//\{\{TAG\}\}/$TAG}"
+            notes="${notes//\{\{GITHUB_REPOSITORY\}\}/$GITHUB_REPOSITORY}"
+            notes="${notes//\{\{PATCH_LIST\}\}/$patch_list}"
+
             gh release create "$TAG" "${assets[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --title "$TAG" \
@@ -301,7 +489,7 @@ jobs:
             gh release edit "$TAG" --latest --repo "$GITHUB_REPOSITORY"
           fi
 
-      - name: Prune older pkgrel assets
+      - name: Prune older Arch pkgrel assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ matrix.tag }}
@@ -340,11 +528,54 @@ jobs:
           )
 
           if [ -z "$stale" ]; then
-            echo "no stale assets for $TAG-$pkgrel"
+            echo "no stale Arch assets for $TAG-$pkgrel"
             exit 0
           fi
           while IFS= read -r asset; do
             [ -n "$asset" ] || continue
             echo "deleting $asset (older pkgrel than $pkgrel)"
+            gh release delete-asset "$TAG" "$asset" --yes --repo "$GITHUB_REPOSITORY"
+          done <<<"$stale"
+
+      - name: Prune older RPM release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ matrix.tag }}
+          VERSION: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          # Same derivation as the build step
+          release=$(git rev-list --count HEAD -- cosmic-comp-traffic.spec patches .github/workflows/release.yml)
+          (( release >= 1 )) || release=1
+
+          stale=$(
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --json assets --jq '.assets[].name' |
+              RELEASE="$release" VERSION="$VERSION" python3 -c '
+          import os, re, sys
+
+          pattern = re.compile(
+              r"^(cosmic-comp-traffic(-debuginfo)?-)"
+              + re.escape(os.environ["VERSION"])
+              + r"-(\d+)(\..*)?\.rpm(\.sha256)?$"
+          )
+          keep = int(os.environ["RELEASE"])
+          for name in sys.stdin.read().split():
+              match = pattern.match(name)
+              if match and int(match.group(3)) < keep:
+                  print(name)
+          '
+          )
+
+          if [ -z "$stale" ]; then
+            echo "no stale RPM assets for $TAG-$release"
+            exit 0
+          fi
+          while IFS= read -r asset; do
+            [ -n "$asset" ] || continue
+            echo "deleting $asset (older release than $release)"
             gh release delete-asset "$TAG" "$asset" --yes --repo "$GITHUB_REPOSITORY"
           done <<<"$stale"
