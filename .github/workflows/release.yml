@@ -214,17 +214,13 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
           shopt -s nullglob
-          assets=()
-          for file in *.pkg.tar.zst; do
+          files=(*.pkg.tar.zst)
+          (( ${#files[@]} )) || { echo "no package was produced" >&2; exit 1; }
+          for file in "${files[@]}"; do
             # release assets cannot contain ':' (the epoch separator), drop the epoch
             asset="${file/1:/}"
-            mv "$file" "$asset"
-            sha256sum "$asset" > "$asset.sha256"
-            assets+=("$asset" "$asset.sha256")
+            [ "$asset" = "$file" ] || mv "$file" "$asset"
           done
-          (( ${#assets[@]} )) || { echo "no package was produced" >&2; exit 1; }
-          printf '%s\n' "${assets[@]}" > /tmp/assets-arch.txt
-          cat /tmp/assets-arch.txt
 
       - name: Upload Arch artifacts
         uses: actions/upload-artifact@v4
@@ -232,7 +228,6 @@ jobs:
           name: arch-packages-${{ matrix.tag }}
           path: |
             *.pkg.tar.zst
-            *.pkg.tar.zst.sha256
           retention-days: 7
 
   build-rpm:
@@ -341,19 +336,14 @@ jobs:
           set -euo pipefail
           cd /home/builder/rpmbuild/RPMS/x86_64
           shopt -s nullglob
-          assets=()
-          for file in *.rpm; do
-            sha256sum "$file" > "$file.sha256"
-            assets+=("$file" "$file.sha256")
-          done
-          (( ${#assets[@]} )) || { echo "no RPM package was produced" >&2; exit 1; }
-          printf '%s\n' "${assets[@]}" > /tmp/assets-rpm.txt
+          files=(*.rpm)
+          (( ${#files[@]} )) || { echo "no RPM package was produced" >&2; exit 1; }
+          printf '%s\n' "${files[@]}" > /tmp/assets-rpm.txt
           cat /tmp/assets-rpm.txt
 
       - name: Copy RPM packages to workspace
         run: |
           cp /home/builder/rpmbuild/RPMS/x86_64/*.rpm "$GITHUB_WORKSPACE/"
-          cp /home/builder/rpmbuild/RPMS/x86_64/*.rpm.sha256 "$GITHUB_WORKSPACE/"
 
       - name: Upload RPM artifacts
         uses: actions/upload-artifact@v4
@@ -361,7 +351,6 @@ jobs:
           name: rpm-packages-${{ matrix.tag }}
           path: |
             *.rpm
-            *.rpm.sha256
           retention-days: 7
 
   publish:
@@ -398,25 +387,30 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
           assets=()
+          # Only the main packages are published: no .sha256 files and no
+          # -debug / -debuginfo / -debugsource packages.
           for file in arch-artifacts/*.pkg.tar.zst; do
             [ -e "$file" ] || continue
+            case "$file" in
+              *-debug-*.pkg.tar.zst) continue ;;
+            esac
             # The Arch job already stripped the epoch separator from the asset
             # name (GitHub disallows ':'), so only rename when it is still
             # present. Otherwise mv tries to rename the file to itself.
             asset="${file/1:/}"
             if [[ "$asset" != "$file" ]]; then
               mv "$file" "$asset"
-              mv "$file.sha256" "$asset.sha256"
             fi
-            assets+=("$asset" "$asset.sha256")
+            assets+=("$asset")
           done
           for file in rpm-artifacts/*.rpm; do
             [ -e "$file" ] || continue
             base=$(basename "$file")
+            case "$base" in
+              *debuginfo*|*debugsource*) continue ;;
+            esac
             mv "$file" .
-            mv "$file.sha256" .
-            # Use the basename: the file was just moved out of rpm-artifacts/.
-            assets+=("$base" "$base.sha256")
+            assets+=("$base")
           done
           (( ${#assets[@]} )) || { echo "no packages were produced" >&2; exit 1; }
           printf '%s\n' "${assets[@]}" > /tmp/assets.txt
@@ -462,16 +456,14 @@ jobs:
 
             **Arch Linux:**
             ```sh
-            gh release download {{TAG}} -R {{GITHUB_REPOSITORY}} -p 'cosmic-comp-traffic-[0-9]*.pkg.tar.zst*' -D /tmp/cosmic-comp-traffic
-            cd /tmp/cosmic-comp-traffic && sha256sum -c ./*.pkg.tar.zst.sha256
-            sudo pacman -U ./*.pkg.tar.zst
+            gh release download {{TAG}} -R {{GITHUB_REPOSITORY}} -p 'cosmic-comp-traffic-[0-9]*.pkg.tar.zst' -D /tmp/cosmic-comp-traffic
+            sudo pacman -U /tmp/cosmic-comp-traffic/*.pkg.tar.zst
             ```
 
             **Fedora:**
             ```sh
-            gh release download {{TAG}} -R {{GITHUB_REPOSITORY}} -p 'cosmic-comp-traffic-*.rpm*' -D /tmp/cosmic-comp-traffic
-            cd /tmp/cosmic-comp-traffic && sha256sum -c ./*.rpm.sha256
-            sudo dnf install ./*.rpm
+            gh release download {{TAG}} -R {{GITHUB_REPOSITORY}} -p 'cosmic-comp-traffic-[0-9]*.rpm' -D /tmp/cosmic-comp-traffic
+            sudo dnf install /tmp/cosmic-comp-traffic/*.rpm
             ```
 
             or simply `./scripts/install-latest.sh {{TAG}}`.
@@ -526,9 +518,10 @@ jobs:
           (( pkgrel >= 1 )) || pkgrel=1
 
           # Rebuilding a tag used to leave every previous pkgrel behind, so
-          # `gh release download -p '*.pkg.tar.zst*'` fetched several builds and
-          # `sudo pacman -U ./*` picked whichever the shell globbed last.
-          # Keep only this pkgrel: main, debug and their sha256 files.
+          # `gh release download -p '*.pkg.tar.zst'` fetched several builds.
+          # Only the main package of the current pkgrel is published now; this
+          # also removes leftover older packages, debug packages and sha256
+          # files published before that policy.
           stale=$(
             gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
               --json assets --jq '.assets[].name' |

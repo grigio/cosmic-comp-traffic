@@ -91,9 +91,8 @@ Packages are built automatically for each upstream release and published to GitH
 
 ```bash
 # Download latest release
-gh release download -R grigio/cosmic-comp-traffic -p 'cosmic-comp-traffic-*.pkg.tar.zst*' -D /tmp/cosmic-comp-traffic
-cd /tmp/cosmic-comp-traffic && sha256sum -c ./*.pkg.tar.zst.sha256
-sudo pacman -U ./*.pkg.tar.zst
+gh release download -R grigio/cosmic-comp-traffic -p 'cosmic-comp-traffic-[0-9]*.pkg.tar.zst' -D /tmp/cosmic-comp-traffic
+sudo pacman -U /tmp/cosmic-comp-traffic/*.pkg.tar.zst
 ```
 
 The package is called `cosmic-comp-traffic`, provides/conflicts/replaces `cosmic-comp`, and installs the same files to the same paths.
@@ -104,9 +103,8 @@ RPM packages are also built automatically for each upstream release and publishe
 
 ```bash
 # Download latest release
-gh release download -R grigio/cosmic-comp-traffic -p 'cosmic-comp-traffic-*.rpm*' -D /tmp/cosmic-comp-traffic
-cd /tmp/cosmic-comp-traffic && sha256sum -c ./*.rpm.sha256
-sudo dnf install ./*.rpm
+gh release download -R grigio/cosmic-comp-traffic -p 'cosmic-comp-traffic-[0-9]*.rpm' -D /tmp/cosmic-comp-traffic
+sudo dnf install /tmp/cosmic-comp-traffic/*.rpm
 ```
 
 The package is called `cosmic-comp-traffic`, provides/conflicts/obsoletes `cosmic-comp`, and installs the same files to the same paths.

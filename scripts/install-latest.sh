@@ -29,10 +29,10 @@ fi
 # Detect package manager
 if command -v pacman >/dev/null; then
   pkg_mgr="pacman"
-  pattern='*.pkg.tar.zst*'
+  pattern='cosmic-comp-traffic-[0-9]*.pkg.tar.zst'
 elif command -v dnf >/dev/null; then
   pkg_mgr="dnf"
-  pattern='*.rpm*'
+  pattern='cosmic-comp-traffic-[0-9]*.rpm'
 else
   echo "Neither pacman nor dnf found. Cannot install package." >&2
   exit 1
@@ -42,8 +42,6 @@ echo "Downloading $pkg_mgr packages for $tag..."
 gh release download "$tag" --repo "$repo" --pattern "$pattern" --dir "$dir"
 
 if [[ $pkg_mgr == "pacman" ]]; then
-  (cd "$dir" && sha256sum --check --quiet ./*.pkg.tar.zst.sha256)
-
   # install the compositor package, not the optional -debug one
   pkgs=()
   for f in "$dir"/*.pkg.tar.zst; do
@@ -63,8 +61,6 @@ if [[ $pkg_mgr == "pacman" ]]; then
   echo "  sudo pacman -S cosmic-comp"
 
 elif [[ $pkg_mgr == "dnf" ]]; then
-  (cd "$dir" && sha256sum --check --quiet ./*.rpm.sha256)
-
   # install the main package, not debuginfo
   pkgs=()
   for f in "$dir"/*.rpm; do
