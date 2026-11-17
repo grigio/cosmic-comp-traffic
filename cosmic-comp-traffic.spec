@@ -57,6 +57,11 @@ patches applied to provide traffic-light style window decorations.
 # Use thin LTO instead of fat LTO for faster builds
 sed -i 's/lto = "fat"/lto = "thin"/' Cargo.toml
 
+# Add rpm profile for Fedora rust-packaging macros
+if ! grep -q '^\[profile.rpm\]' Cargo.toml; then
+  echo -e '\n[profile.rpm]\ninherits = "release"' >> Cargo.toml
+fi
+
 # Fetch cargo dependencies
 cargo fetch --locked
 
