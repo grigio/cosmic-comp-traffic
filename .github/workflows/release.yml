@@ -260,10 +260,18 @@ jobs:
       - name: Install build dependencies
         run: |
           dnf install -y \
-            cargo rust gcc just lld \
+            gcc just lld \
             libdisplay-info-devel wayland-devel libinput-devel pixman-devel \
             mesa-libgbm-devel libxkbcommon-devel libseat-devel systemd-devel \
             pkgconfig rpm-build rpm-sign dnf-plugins-core rust-packaging
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          source "$HOME/.cargo/env"
+          rustup toolchain install stable --component rust-src
+          rustup default stable
 
       - name: Create build user
         run: |
