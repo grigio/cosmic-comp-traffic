@@ -26,6 +26,10 @@ on:
         required: false
         type: boolean
         default: false
+      source_ref:
+        description: 'For pre-releases: upstream commit/branch/ref to build instead of a tag (tag input is required)'
+        required: false
+        type: string
   push:
     branches: [master]
     paths:
@@ -62,6 +66,7 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
           FORCE: ${{ inputs.force }}
           LATEST_ONLY: ${{ github.event_name == 'push' }}
+          SOURCE_REF: ${{ inputs.source_ref }}
         run: |
           python3 - <<'PY'
           import json, os, re, subprocess
@@ -69,11 +74,38 @@ jobs:
           upstream = os.environ["UPSTREAM_REPO"]
           min_version = os.environ.get("MIN_VERSION", "0.0.0")
           input_tag = (os.environ.get("INPUT_TAG") or "").strip()
+          source_ref = (os.environ.get("SOURCE_REF") or "").strip()
           force = (os.environ.get("FORCE") or "").lower() == "true"
           latest_only = (os.environ.get("LATEST_ONLY") or "").lower() == "true"
 
           def vkey(version):
               return tuple(int(part) for part in version.split("."))
+
+          def emit(matrix, latest_tag):
+              with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+                  out.write(f"matrix={json.dumps(matrix)}\n")
+                  out.write(f"count={len(matrix)}\n")
+                  out.write(f"latest_tag={latest_tag}\n")
+              print(f"{len(matrix)} build(s): {json.dumps(matrix)}")
+
+          # Pre-release from an arbitrary upstream ref (no upstream tag exists yet).
+          # The release tag is created in this repo at the dispatched ref, and the
+          # GitHub "Latest" marker is left on the newest upstream release.
+          if source_ref:
+              m = re.fullmatch(r"epoch-(\d+\.\d+\.\d+)-rc\.(\d+)", input_tag)
+              if not m:
+                  raise SystemExit(
+                      f"with source_ref, tag must be epoch-X.Y.Z-rc.N (got {input_tag!r})"
+                  )
+              base, rc = m.group(1), m.group(2)
+              emit([{
+                  "tag": input_tag,
+                  "version": f"{base}.rc{rc}",
+                  "rpm_version": f"{base}~rc{rc}",
+                  "source_ref": source_ref,
+                  "prerelease": True,
+              }], "")
+              raise SystemExit(0)
 
           ls = subprocess.run(
               ["git", "ls-remote", "--tags", "--refs",
@@ -119,12 +151,14 @@ jobs:
           else:
               selected = [(t, v) for t, v in supported if force or t not in existing]
 
-          matrix = [{"tag": tag, "version": version} for tag, version in selected]
-          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-              out.write(f"matrix={json.dumps(matrix)}\n")
-              out.write(f"count={len(matrix)}\n")
-              out.write(f"latest_tag={latest_tag}\n")
-          print(f"{len(matrix)} build(s): {json.dumps(matrix)}")
+          matrix = [{
+              "tag": tag,
+              "version": version,
+              "rpm_version": version,
+              "source_ref": "",
+              "prerelease": False,
+          } for tag, version in selected]
+          emit(matrix, latest_tag)
           PY
 
   build-arch:
@@ -177,6 +211,7 @@ jobs:
       - name: Build Arch package
         env:
           COSMIC_COMP_VERSION: ${{ matrix.version }}
+          COSMIC_COMP_SOURCE_REF: ${{ matrix.source_ref }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
@@ -204,6 +239,7 @@ jobs:
           # workflow change.
           su builder -s /bin/bash -c \
             "cd '$build_dir' && COSMIC_COMP_VERSION='$COSMIC_COMP_VERSION' COSMIC_COMP_PKGREL='$pkgrel' \
+             COSMIC_COMP_SOURCE_REF='$COSMIC_COMP_SOURCE_REF' \
              PKGDEST=/tmp/pkgout makepkg --syncdeps --noconfirm --force --cleanbuild"
 
           cp /tmp/pkgout/*.pkg.tar.zst "$GITHUB_WORKSPACE/"
@@ -294,12 +330,22 @@ jobs:
 
       - name: Download upstream source tarball
         env:
-          VERSION: ${{ matrix.version }}
+          VERSION: ${{ matrix.rpm_version }}
+          SOURCE_REF: ${{ matrix.source_ref }}
         run: |
           set -euo pipefail
           cd /home/builder/rpmbuild/SOURCES
-          curl -L -o "cosmic-comp-epoch-${VERSION}.tar.gz" \
-            "https://github.com/pop-os/cosmic-comp/archive/refs/tags/epoch-${VERSION}.tar.gz"
+          if [[ -n $SOURCE_REF ]]; then
+            # Pre-release: GitHub archives any commit/branch at this URL and
+            # extracts it to cosmic-comp-<ref>.
+            name="cosmic-comp-${SOURCE_REF}"
+            curl -L -o "${name}.tar.gz" \
+              "https://github.com/$UPSTREAM_REPO/archive/${SOURCE_REF}.tar.gz"
+          else
+            name="cosmic-comp-epoch-${VERSION}"
+            curl -L -o "${name}.tar.gz" \
+              "https://github.com/$UPSTREAM_REPO/archive/refs/tags/epoch-${VERSION}.tar.gz"
+          fi
 
       - name: Copy spec file and patches
         run: |
@@ -312,7 +358,8 @@ jobs:
 
       - name: Build RPM package
         env:
-          VERSION: ${{ matrix.version }}
+          VERSION: ${{ matrix.rpm_version }}
+          SOURCE_REF: ${{ matrix.source_ref }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
@@ -323,11 +370,20 @@ jobs:
           (( release >= 1 )) || release=1
           echo "building cosmic-comp-traffic $VERSION (release $release)"
 
+          # Quotes are embedded in the string passed to the builder's shell so
+          # each --define keeps its argument with a space intact.
+          extra_defines=""
+          if [[ -n $SOURCE_REF ]]; then
+            extra_defines="--define \"cosmic_source_tar cosmic-comp-${SOURCE_REF}.tar.gz\" \
+              --define \"cosmic_source_dir cosmic-comp-${SOURCE_REF}\""
+          fi
+
           su builder -s /bin/bash -c \
             "cd /home/builder/rpmbuild && rpmbuild -ba \
               --define \"_topdir /home/builder/rpmbuild\" \
               --define \"version $VERSION\" \
               --define \"cosmic_release $release\" \
+              $extra_defines \
               SPECS/cosmic-comp-traffic.spec"
 
       - name: Collect RPM packages
@@ -421,6 +477,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ matrix.tag }}
           VERSION: ${{ matrix.version }}
+          SOURCE_REF: ${{ matrix.source_ref }}
+          PRERELEASE: ${{ matrix.prerelease }}
           LATEST_TAG: ${{ needs.discover.outputs.latest_tag }}
           FORCE: ${{ inputs.force || github.event_name == 'push' }}
         run: |
@@ -434,9 +492,15 @@ jobs:
           # Mirror the upstream tag, so the release points at the upstream commit
           # instead of at a random commit of this fork.
           if ! git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "mirroring upstream tag $TAG"
-            git fetch --no-tags "https://github.com/$UPSTREAM_REPO.git" "refs/tags/$TAG:refs/tags/$TAG"
-            git push origin "refs/tags/$TAG"
+            if [[ -n $SOURCE_REF ]]; then
+              echo "creating pre-release tag $TAG at $(git rev-parse --short HEAD)"
+              git tag -a "$TAG" -m "Pre-release from upstream $SOURCE_REF"
+              git push origin "refs/tags/$TAG"
+            else
+              echo "mirroring upstream tag $TAG"
+              git fetch --no-tags "https://github.com/$UPSTREAM_REPO.git" "refs/tags/$TAG:refs/tags/$TAG"
+              git push origin "refs/tags/$TAG"
+            fi
           fi
 
           patch_list=$(
@@ -449,7 +513,7 @@ jobs:
             gh release upload "$TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
           else
             notes=$(cat <<'EOF'
-            Arch Linux and Fedora RPM packages of upstream [cosmic-comp](https://github.com/{{UPSTREAM_REPO}}) `{{TAG}}`
+            {{PRERELEASE_NOTICE}}Arch Linux and Fedora RPM packages of upstream [cosmic-comp](https://github.com/{{UPSTREAM_REPO}}) `{{TAG}}`
             with the patches from this fork applied on top.
 
             ### Install
@@ -486,12 +550,27 @@ jobs:
             notes="${notes//\{\{TAG\}\}/$TAG}"
             notes="${notes//\{\{GITHUB_REPOSITORY\}\}/$GITHUB_REPOSITORY}"
             notes="${notes//\{\{PATCH_LIST\}\}/$patch_list}"
+            if [[ "${PRERELEASE,,}" == "true" ]]; then
+              prerelease_notice=$'> **Pre-release** built from upstream `'"$SOURCE_REF"'` (not yet tagged upstream).\n> Expect changes before the final '"$VERSION"' release.\n\n'
+            else
+              prerelease_notice=""
+            fi
+            notes="${notes//\{\{PRERELEASE_NOTICE\}\}/$prerelease_notice}"
 
+            prerelease_flag=()
+            if [[ "${PRERELEASE,,}" == "true" ]]; then
+              prerelease_flag=(--prerelease)
+            fi
             gh release create "$TAG" "${assets[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --title "$TAG" \
               --notes "$notes" \
+              "${prerelease_flag[@]}" \
               --verify-tag
+          fi
+
+          if [[ "${PRERELEASE,,}" == "true" ]]; then
+            gh release edit "$TAG" --prerelease --repo "$GITHUB_REPOSITORY"
           fi
 
           # GitHub's "Latest" marker follows the most recently published
@@ -555,7 +634,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ matrix.tag }}
-          VERSION: ${{ matrix.version }}
+          VERSION: ${{ matrix.rpm_version }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"

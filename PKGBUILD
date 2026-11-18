@@ -62,7 +62,13 @@ prepare() {
   cd cosmic-comp
 
   git fetch --quiet --tags origin
-  git checkout --quiet --detach "epoch-${pkgver}"
+  if [[ -n ${COSMIC_COMP_SOURCE_REF:-} ]]; then
+    # Pre-release: build from an upstream commit/branch that has no tag yet.
+    msg2 "Checking out upstream ref ${COSMIC_COMP_SOURCE_REF} (pre-release)"
+    git checkout --quiet --detach "$COSMIC_COMP_SOURCE_REF"
+  else
+    git checkout --quiet --detach "epoch-${pkgver}"
+  fi
 
   cargo fetch --locked
 

@@ -4,12 +4,16 @@ Version:        %{version}
 # default for local builds. This must match the release number the publish
 # step uses when pruning older assets.
 %{!?cosmic_release: %define cosmic_release 1}
+# Pre-release builds pass both defines so a non-tag ref (e.g. a commit SHA) can
+# be used as Source0. Normal tagged builds use the defaults below.
+%{!?cosmic_source_tar: %define cosmic_source_tar cosmic-comp-epoch-%{version}.tar.gz}
+%{!?cosmic_source_dir: %define cosmic_source_dir cosmic-comp-epoch-%{version}}
 Release:        %{cosmic_release}%{?dist}
 Summary:        Compositor for the COSMIC desktop environment with macOS-style traffic-light decorations
 
 License:        GPL-3.0-only
 URL:            https://github.com/grigio/cosmic-comp-traffic
-Source0:        https://github.com/pop-os/cosmic-comp/archive/refs/tags/epoch-%{version}.tar.gz#/cosmic-comp-epoch-%{version}.tar.gz
+Source0:        https://github.com/pop-os/cosmic-comp/archive/refs/tags/epoch-%{version}.tar.gz#/%{cosmic_source_tar}
 
 # Patches from the cosmic-comp-traffic fork (copied to SOURCES by the build script)
 Patch0:         0001-macos-traffic-light-decorations.patch
@@ -20,7 +24,6 @@ Patch4:         0005-wlr-gamma-control.patch
 Patch5:         0006-live-theme-reload.patch
 Patch6:         0007-send-frames-missing-workspace-set.patch
 Patch7:         0008-output-removal-without-unwrap.patch
-Patch8:         0009-clippy-needless-bool.patch
 
 BuildRequires:  cargo
 BuildRequires:  rust
@@ -57,7 +60,7 @@ This is a fork of the upstream cosmic-comp from pop-os/cosmic-comp with
 patches applied to provide traffic-light style window decorations.
 
 %prep
-%autosetup -n cosmic-comp-epoch-%{version} -p1
+%autosetup -n %{cosmic_source_dir} -p1
 
 # Use thin LTO instead of fat LTO for faster builds
 sed -i 's/lto = "fat"/lto = "thin"/' Cargo.toml
