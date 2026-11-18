@@ -1,10 +1,10 @@
 diff --git a/src/input/mod.rs b/src/input/mod.rs
-index d51dd8a6..4d5905d1 100644
+index 496fa076..ca93f3a2 100644
 --- a/src/input/mod.rs
 +++ b/src/input/mod.rs
-@@ -1248,8 +1248,10 @@ impl State {
-                                 natural_scroll = natural;
-                             }
+@@ -1245,8 +1245,10 @@ impl State {
+                                 true
+                             };
                              activate_action = match gesture_state.fingers {
 -                                3 => None, // TODO: 3 finger gestures
 -                                4 => {

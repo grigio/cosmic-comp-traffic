@@ -11,4 +11,3 @@
 0006-live-theme-reload.patch
 0007-send-frames-missing-workspace-set.patch
 0008-output-removal-without-unwrap.patch
-0009-clippy-needless-bool.patch
