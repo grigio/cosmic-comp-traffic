@@ -70,6 +70,7 @@
             include = [
               ./src
               ./cosmic-comp-config
+              ./cosmic-comp-ipc
               ./data
               ./resources
               ./i18n.toml
@@ -83,7 +84,7 @@
             ];
           };
 
-          cargoHash = "sha256-8wGdRDw9lkWZfUoDJlkAYkn3YO03Hpvt7QiONuzFggM=";
+          cargoHash = "sha256-m5CySOlC3lhTSWLGciJdwGnZKd5xL/vyO5KyPHBfhVI=";
 
           nativeBuildInputs = with pkgs; [
             pkg-config

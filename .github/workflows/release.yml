@@ -561,7 +561,10 @@ jobs:
             notes="${notes//\{\{GITHUB_REPOSITORY\}\}/$GITHUB_REPOSITORY}"
             notes="${notes//\{\{PATCH_LIST\}\}/$patch_list}"
             if [[ "${PRERELEASE,,}" == "true" ]]; then
-              prerelease_notice=$'> **Pre-release** built from upstream `'"$SOURCE_REF"'` (not yet tagged upstream).\n> Expect changes before the final '"$VERSION"' release.\n\n'
+              final_version=${VERSION%%.rc*}
+              prerelease_notice=$(printf \
+                '> **Pre-release** built from upstream `%s` (not yet tagged upstream).\n> Expect changes before the final %s release.\n\n' \
+                "$SOURCE_REF" "$final_version")
             else
               prerelease_notice=""
             fi
