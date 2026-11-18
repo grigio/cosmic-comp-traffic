@@ -122,16 +122,25 @@ for tag in "${tags[@]}"; do
 
   (
     cd "$tree"
+    # A version-specific patch with the same name replaces the common one.
+    declare -A applied_names=()
     while IFS= read -r name || [[ -n $name ]]; do
       name=${name%%#*}
       name=${name//[[:space:]]/}
       [[ -z $name ]] && continue
-      apply_patch "$repo_dir/patches/common/$name"
+      patch="$repo_dir/patches/common/$name"
+      if [[ -f "$repo_dir/patches/$version/$name" ]]; then
+        patch="$repo_dir/patches/$version/$name"
+      fi
+      apply_patch "$patch"
+      applied_names[$name]=1
     done < "$repo_dir/$series"
 
     if [[ -d "$repo_dir/patches/$version" ]]; then
       for patch in "$repo_dir/patches/$version"/*.patch; do
         [[ -e $patch ]] || continue
+        name=$(basename "$patch")
+        [[ -n ${applied_names[$name]:-} ]] && continue
         apply_patch "$patch"
       done
     fi

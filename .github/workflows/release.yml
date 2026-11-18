@@ -348,9 +348,19 @@ jobs:
           fi
 
       - name: Copy spec file and patches
+        env:
+          ARCH_VERSION: ${{ matrix.version }}
         run: |
+          set -euo pipefail
           cp "$GITHUB_WORKSPACE/cosmic-comp-traffic.spec" /home/builder/rpmbuild/SPECS/
-          cp "$GITHUB_WORKSPACE/patches/common"/*.patch /home/builder/rpmbuild/SOURCES/
+          # A version-specific patch replaces the common one with the same name.
+          for patch in "$GITHUB_WORKSPACE"/patches/common/*.patch; do
+            name=$(basename "$patch")
+            if [[ -f "$GITHUB_WORKSPACE/patches/$ARCH_VERSION/$name" ]]; then
+              patch="$GITHUB_WORKSPACE/patches/$ARCH_VERSION/$name"
+            fi
+            cp "$patch" /home/builder/rpmbuild/SOURCES/
+          done
           # Replace build date placeholder with current date in RPM format
           build_date=$(date +"%a %b %d %Y")
           sed -i "s/@@BUILD_DATE@@/$build_date/" /home/builder/rpmbuild/SPECS/cosmic-comp-traffic.spec

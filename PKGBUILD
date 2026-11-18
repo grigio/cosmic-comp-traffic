@@ -74,9 +74,12 @@ prepare() {
 
   local applied=0
   local series="$startdir/patches/series"
+  local -A ordered=()
+  local patches=()
   if [[ -f "$series" ]]; then
     # The series file is the explicit order; scripts/check-patches.sh verifies
-    # that it lists every common patch exactly once.
+    # that it lists every common patch exactly once. A version-specific patch
+    # with the same name replaces the common one for this $pkgver.
     local name patch
     while IFS= read -r name || [[ -n "$name" ]]; do
       name=${name%%#*}
@@ -87,26 +90,40 @@ prepare() {
         error "patches/series lists a missing patch: $name"
         return 1
       fi
-      _apply_patch "$patch"
-      applied=$((applied + 1))
+      if [[ -f "$startdir/patches/$pkgver/$name" ]]; then
+        patch="$startdir/patches/$pkgver/$name"
+      fi
+      ordered[$name]=1
+      patches+=("$patch")
     done < "$series"
   else
-    local patch
+    local patch name
     for patch in "$startdir/patches/common"/*.patch; do
       [[ -e "$patch" ]] || continue
-      _apply_patch "$patch"
-      applied=$((applied + 1))
+      name=$(basename "$patch")
+      if [[ -f "$startdir/patches/$pkgver/$name" ]]; then
+        patch="$startdir/patches/$pkgver/$name"
+      fi
+      ordered[$name]=1
+      patches+=("$patch")
     done
   fi
 
+  # Version-specific patches not listed in the series are applied afterwards.
   if [[ -d "$startdir/patches/$pkgver" ]]; then
-    local patch
+    local patch name
     for patch in "$startdir/patches/$pkgver"/*.patch; do
       [[ -e "$patch" ]] || continue
-      _apply_patch "$patch"
-      applied=$((applied + 1))
+      name=$(basename "$patch")
+      [[ -n ${ordered[$name]:-} ]] && continue
+      patches+=("$patch")
     done
   fi
+
+  for patch in "${patches[@]}"; do
+    _apply_patch "$patch"
+    applied=$((applied + 1))
+  done
 
   if ((applied == 0)); then
     error "No patches found for $pkgver"

@@ -1,8 +1,11 @@
 # Applied in this order to every supported upstream tag.
 #
 # Keep this list in sync with patches/common/*.patch: scripts/check-patches.sh
-# fails if a patch is missing from the series or listed twice. Version-specific
-# patches live in patches/<version>/ and are applied after this list.
+# fails if a patch is missing from the series or listed twice. A patch in
+# patches/<version>/ with the same name replaces the common one for that
+# version; any version-specific patch not listed here is applied afterwards.
+# This lets older tags keep the pre-0a67a6cd form of a patch while common/
+# tracks the current upstream base.
 0001-macos-traffic-light-decorations.patch
 0002-wlr-foreign-toplevel-management.patch
 0003-three-finger-workspace-swipe.patch
