@@ -1,0 +1,286 @@
+diff --git a/src/wayland/handlers/toplevel_info.rs b/src/wayland/handlers/toplevel_info.rs
+index d9d5ca31..0203080a 100644
+--- a/src/wayland/handlers/toplevel_info.rs
++++ b/src/wayland/handlers/toplevel_info.rs
+@@ -3,7 +3,7 @@
+ use smithay::utils::{Rectangle, user_data::UserDataMap};
+ 
+ use crate::{
+-    shell::CosmicSurface,
++    shell::{CosmicSurface, element::surface::WeakCosmicSurface},
+     state::State,
+     utils::prelude::Global,
+     wayland::protocols::{
+@@ -26,6 +26,8 @@ impl ToplevelInfoHandler for State {
+ }
+ 
+ impl Window for CosmicSurface {
++    type Weak = WeakCosmicSurface;
++
+     fn title(&self) -> String {
+         CosmicSurface::title(self)
+     }
+@@ -65,6 +67,14 @@ impl Window for CosmicSurface {
+     fn user_data(&self) -> &UserDataMap {
+         CosmicSurface::user_data(self)
+     }
++
++    fn downgrade(&self) -> Self::Weak {
++        CosmicSurface::downgrade(self)
++    }
++
++    fn upgrade(weak: &Self::Weak) -> Option<Self> {
++        weak.upgrade()
++    }
+ }
+ 
+ impl WlrForeignToplevelHandler for State {
+diff --git a/src/wayland/protocols/toplevel_info.rs b/src/wayland/protocols/toplevel_info.rs
+index 89ce36c7..b39bea34 100644
+--- a/src/wayland/protocols/toplevel_info.rs
++++ b/src/wayland/protocols/toplevel_info.rs
+@@ -33,6 +33,14 @@ use cosmic_protocols::toplevel_info::v1::server::{
+ use tracing::error;
+ 
+ pub trait Window: IsAlive + Clone + PartialEq + Send {
++    /// A weak reference type that does not keep the window alive.
++    ///
++    /// `ToplevelHandleStateInner` is stored in the user data of protocol
++    /// handles that clients may hold indefinitely. A strong reference there
++    /// would pin `Arc<WindowInner>` (and the GPU textures in the surface's
++    /// user data) long after the window has been destroyed.
++    type Weak: Clone + Send + 'static;
++
+     fn title(&self) -> String;
+     fn app_id(&self) -> String;
+     fn is_activated(&self) -> bool;
+@@ -43,6 +51,11 @@ pub trait Window: IsAlive + Clone + PartialEq + Send {
+     fn is_resizing(&self) -> bool;
+     fn global_geometry(&self) -> Option<Rectangle<i32, Global>>;
+     fn user_data(&self) -> &UserDataMap;
++
++    /// Create a weak reference to this window.
++    fn downgrade(&self) -> Self::Weak;
++    /// Upgrade a weak reference, returning `None` if the window is gone.
++    fn upgrade(weak: &Self::Weak) -> Option<Self>;
+ }
+ 
+ #[derive(Debug)]
+@@ -100,6 +113,13 @@ impl ToplevelStateInner {
+     }
+ }
+ 
++/// Per-handle state stored in each `ZcosmicToplevelHandleV1`'s user data.
++///
++/// `window` is a *weak* reference: protocol handles persist until the client
++/// destroys them (cosmic-panel, cosmic-workspaces, and even cosmic-term itself
++/// bind this protocol and keep handles alive). Holding a strong `W` here used
++/// to keep `WindowInner` and all of its GPU textures alive forever, causing a
++/// monotonic VRAM/RSS leak every time a window was opened and closed.
+ pub struct ToplevelHandleStateInner<W: Window> {
+     outputs: Vec<Output>,
+     geometry: Option<Rectangle<i32, Global>>,
+@@ -108,7 +128,7 @@ pub struct ToplevelHandleStateInner<W: Window> {
+     title: String,
+     app_id: String,
+     states: Option<Vec<States>>,
+-    pub(super) window: Option<W>,
++    pub(super) window: Option<W::Weak>,
+ }
+ pub type ToplevelHandleState<W> = Mutex<ToplevelHandleStateInner<W>>;
+ 
+@@ -122,7 +142,7 @@ impl<W: Window> ToplevelHandleStateInner<W> {
+             title: String::new(),
+             app_id: String::new(),
+             states: None,
+-            window: Some(window.clone()),
++            window: Some(window.downgrade()),
+         })
+     }
+ 
+@@ -682,7 +702,7 @@ where
+ pub fn window_from_handle<W: Window + 'static>(handle: ZcosmicToplevelHandleV1) -> Option<W> {
+     handle
+         .data::<ToplevelHandleState<W>>()
+-        .and_then(|state| state.lock().unwrap().window.clone())
++        .and_then(|state| state.lock().unwrap().window.as_ref().and_then(W::upgrade))
+ }
+ 
+ pub fn window_from_ext<W: Window + 'static, D>(
+diff --git a/src/wayland/protocols/toplevel_management.rs b/src/wayland/protocols/toplevel_management.rs
+index 2f1e630a..dd4641bf 100644
+--- a/src/wayland/protocols/toplevel_management.rs
++++ b/src/wayland/protocols/toplevel_management.rs
+@@ -186,43 +186,73 @@ where
+     ) {
+         match request {
+             zcosmic_toplevel_manager_v1::Request::Activate { toplevel, seat } => {
+-                let window = window_from_handle(toplevel).unwrap();
++                let Some(window) = window_from_handle(toplevel) else {
++                    // Handle outlived its window (weak reference): ignore.
++                    return;
++                };
+                 state.activate(dh, &window, Seat::from_resource(&seat));
+             }
+             zcosmic_toplevel_manager_v1::Request::Close { toplevel } => {
+-                let window = window_from_handle(toplevel).unwrap();
++                let Some(window) = window_from_handle(toplevel) else {
++                    // Handle outlived its window (weak reference): ignore.
++                    return;
++                };
+                 state.close(dh, &window);
+             }
+             zcosmic_toplevel_manager_v1::Request::SetFullscreen { toplevel, output } => {
+-                let window = window_from_handle(toplevel).unwrap();
++                let Some(window) = window_from_handle(toplevel) else {
++                    // Handle outlived its window (weak reference): ignore.
++                    return;
++                };
+                 state.fullscreen(dh, &window, output.as_ref().and_then(Output::from_resource))
+             }
+             zcosmic_toplevel_manager_v1::Request::UnsetFullscreen { toplevel } => {
+-                let window = window_from_handle(toplevel).unwrap();
++                let Some(window) = window_from_handle(toplevel) else {
++                    // Handle outlived its window (weak reference): ignore.
++                    return;
++                };
+                 state.unfullscreen(dh, &window);
+             }
+             zcosmic_toplevel_manager_v1::Request::SetMaximized { toplevel } => {
+-                let window = window_from_handle(toplevel).unwrap();
++                let Some(window) = window_from_handle(toplevel) else {
++                    // Handle outlived its window (weak reference): ignore.
++                    return;
++                };
+                 state.maximize(dh, &window);
+             }
+             zcosmic_toplevel_manager_v1::Request::UnsetMaximized { toplevel } => {
+-                let window = window_from_handle(toplevel).unwrap();
++                let Some(window) = window_from_handle(toplevel) else {
++                    // Handle outlived its window (weak reference): ignore.
++                    return;
++                };
+                 state.unmaximize(dh, &window);
+             }
+             zcosmic_toplevel_manager_v1::Request::SetMinimized { toplevel } => {
+-                let window = window_from_handle(toplevel).unwrap();
++                let Some(window) = window_from_handle(toplevel) else {
++                    // Handle outlived its window (weak reference): ignore.
++                    return;
++                };
+                 state.minimize(dh, &window);
+             }
+             zcosmic_toplevel_manager_v1::Request::UnsetMinimized { toplevel } => {
+-                let window = window_from_handle(toplevel).unwrap();
++                let Some(window) = window_from_handle(toplevel) else {
++                    // Handle outlived its window (weak reference): ignore.
++                    return;
++                };
+                 state.unminimize(dh, &window);
+             }
+             zcosmic_toplevel_manager_v1::Request::SetSticky { toplevel } => {
+-                let window = window_from_handle(toplevel).unwrap();
++                let Some(window) = window_from_handle(toplevel) else {
++                    // Handle outlived its window (weak reference): ignore.
++                    return;
++                };
+                 state.set_sticky(dh, &window);
+             }
+             zcosmic_toplevel_manager_v1::Request::UnsetSticky { toplevel } => {
+-                let window = window_from_handle(toplevel).unwrap();
++                let Some(window) = window_from_handle(toplevel) else {
++                    // Handle outlived its window (weak reference): ignore.
++                    return;
++                };
+                 state.unset_sticky(dh, &window);
+             }
+             zcosmic_toplevel_manager_v1::Request::SetRectangle {
+@@ -233,8 +263,12 @@ where
+                 width,
+                 height,
+             } => {
+-                let window =
+-                    window_from_handle::<<D as ToplevelInfoHandler>::Window>(toplevel).unwrap();
++                let Some(window) =
++                    window_from_handle::<<D as ToplevelInfoHandler>::Window>(toplevel)
++                else {
++                    // Handle outlived its window (weak reference): ignore.
++                    return;
++                };
+                 if let Some(toplevel_state) = window.user_data().get::<ToplevelState>() {
+                     let mut toplevel_state = toplevel_state.lock().unwrap();
+                     toplevel_state
+@@ -254,7 +288,10 @@ where
+                 workspace,
+                 output,
+             } => {
+-                let window = window_from_handle(toplevel).unwrap();
++                let Some(window) = window_from_handle(toplevel) else {
++                    // Handle outlived its window (weak reference): ignore.
++                    return;
++                };
+                 if let Some(workspace_handle) =
+                     state.workspace_state().get_ext_workspace_handle(&workspace)
+                     && let Some(output) = Output::from_resource(&output)
+diff --git a/src/wayland/protocols/wlr_foreign_toplevel.rs b/src/wayland/protocols/wlr_foreign_toplevel.rs
+index bb240624..3d96efa4 100644
+--- a/src/wayland/protocols/wlr_foreign_toplevel.rs
++++ b/src/wayland/protocols/wlr_foreign_toplevel.rs
+@@ -43,7 +43,9 @@ pub struct WlrManagerData {
+ }
+ 
+ pub struct WlrHandleStateInner<W: Window> {
+-    window: Option<W>,
++    // Weak on purpose: taskbars/docks keep these handles alive indefinitely.
++    // A strong `W` here would pin the window (and its GPU textures) forever.
++    window: Option<W::Weak>,
+     title: String,
+     app_id: String,
+     /// Raw `zwlr_foreign_toplevel_handle_v1::State` values last sent.
+@@ -54,7 +56,7 @@ pub struct WlrHandleStateInner<W: Window> {
+ impl<W: Window> WlrHandleStateInner<W> {
+     fn new(window: W) -> WlrHandleState<W> {
+         Mutex::new(WlrHandleStateInner {
+-            window: Some(window),
++            window: Some(window.downgrade()),
+             title: String::new(),
+             app_id: String::new(),
+             states: None,
+@@ -135,8 +137,10 @@ where
+             // being in `toplevels` matters as much as being alive.
+             handles.retain(|handle| {
+                 let alive = handle.data::<WlrHandleState<W>>().is_some_and(|state| {
+-                    state.lock().unwrap().window.as_ref().is_some_and(|window| {
+-                        window.alive() && toplevels.iter().any(|toplevel| toplevel == window)
++                    state.lock().unwrap().window.as_ref().is_some_and(|weak| {
++                        W::upgrade(weak).is_some_and(|window| {
++                            window.alive() && toplevels.iter().any(|toplevel| toplevel == &window)
++                        })
+                     })
+                 });
+                 if !alive && handle.is_alive() {
+@@ -150,7 +154,14 @@ where
+                     .iter()
+                     .find(|handle| {
+                         handle.data::<WlrHandleState<W>>().is_some_and(|state| {
+-                            state.lock().unwrap().window.as_ref() == Some(window)
++                            state
++                                .lock()
++                                .unwrap()
++                                .window
++                                .as_ref()
++                                .and_then(W::upgrade)
++                                .as_ref()
++                                == Some(window)
+                         })
+                     })
+                     .cloned();
+@@ -339,7 +350,7 @@ where
+ fn window_from_handle<W: Window + 'static>(handle: &ZwlrForeignToplevelHandleV1) -> Option<W> {
+     handle
+         .data::<WlrHandleState<W>>()
+-        .and_then(|state| state.lock().unwrap().window.clone())
++        .and_then(|state| state.lock().unwrap().window.as_ref().and_then(W::upgrade))
+ }
+ 
+ impl<D, W> Dispatch<ZwlrForeignToplevelHandleV1, WlrHandleState<W>, D>

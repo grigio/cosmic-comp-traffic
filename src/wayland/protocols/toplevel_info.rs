@@ -33,6 +33,14 @@ use cosmic_protocols::toplevel_info::v1::server::{
 use tracing::error;
 
 pub trait Window: IsAlive + Clone + PartialEq + Send {
+    /// A weak reference type that does not keep the window alive.
+    ///
+    /// `ToplevelHandleStateInner` is stored in the user data of protocol
+    /// handles that clients may hold indefinitely. A strong reference there
+    /// would pin `Arc<WindowInner>` (and the GPU textures in the surface's
+    /// user data) long after the window has been destroyed.
+    type Weak: Clone + Send + 'static;
+
     fn title(&self) -> String;
     fn app_id(&self) -> String;
     fn is_activated(&self) -> bool;
@@ -43,6 +51,11 @@ pub trait Window: IsAlive + Clone + PartialEq + Send {
     fn is_resizing(&self) -> bool;
     fn global_geometry(&self) -> Option<Rectangle<i32, Global>>;
     fn user_data(&self) -> &UserDataMap;
+
+    /// Create a weak reference to this window.
+    fn downgrade(&self) -> Self::Weak;
+    /// Upgrade a weak reference, returning `None` if the window is gone.
+    fn upgrade(weak: &Self::Weak) -> Option<Self>;
 }
 
 #[derive(Debug)]
@@ -100,6 +113,13 @@ impl ToplevelStateInner {
     }
 }
 
+/// Per-handle state stored in each `ZcosmicToplevelHandleV1`'s user data.
+///
+/// `window` is a *weak* reference: protocol handles persist until the client
+/// destroys them (cosmic-panel, cosmic-workspaces, and even cosmic-term itself
+/// bind this protocol and keep handles alive). Holding a strong `W` here used
+/// to keep `WindowInner` and all of its GPU textures alive forever, causing a
+/// monotonic VRAM/RSS leak every time a window was opened and closed.
 pub struct ToplevelHandleStateInner<W: Window> {
     outputs: Vec<Output>,
     geometry: Option<Rectangle<i32, Global>>,
@@ -108,7 +128,7 @@ pub struct ToplevelHandleStateInner<W: Window> {
     title: String,
     app_id: String,
     states: Option<Vec<States>>,
-    pub(super) window: Option<W>,
+    pub(super) window: Option<W::Weak>,
 }
 pub type ToplevelHandleState<W> = Mutex<ToplevelHandleStateInner<W>>;
 
@@ -122,7 +142,7 @@ impl<W: Window> ToplevelHandleStateInner<W> {
             title: String::new(),
             app_id: String::new(),
             states: None,
-            window: Some(window.clone()),
+            window: Some(window.downgrade()),
         })
     }
 
@@ -682,7 +702,7 @@ where
 pub fn window_from_handle<W: Window + 'static>(handle: ZcosmicToplevelHandleV1) -> Option<W> {
     handle
         .data::<ToplevelHandleState<W>>()
-        .and_then(|state| state.lock().unwrap().window.clone())
+        .and_then(|state| state.lock().unwrap().window.as_ref().and_then(W::upgrade))
 }
 
 pub fn window_from_ext<W: Window + 'static, D>(

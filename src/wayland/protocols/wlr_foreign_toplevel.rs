@@ -43,7 +43,9 @@ pub struct WlrManagerData {
 }
 
 pub struct WlrHandleStateInner<W: Window> {
-    window: Option<W>,
+    // Weak on purpose: taskbars/docks keep these handles alive indefinitely.
+    // A strong `W` here would pin the window (and its GPU textures) forever.
+    window: Option<W::Weak>,
     title: String,
     app_id: String,
     /// Raw `zwlr_foreign_toplevel_handle_v1::State` values last sent.
@@ -54,7 +56,7 @@ pub struct WlrHandleStateInner<W: Window> {
 impl<W: Window> WlrHandleStateInner<W> {
     fn new(window: W) -> WlrHandleState<W> {
         Mutex::new(WlrHandleStateInner {
-            window: Some(window),
+            window: Some(window.downgrade()),
             title: String::new(),
             app_id: String::new(),
             states: None,
@@ -135,8 +137,10 @@ where
             // being in `toplevels` matters as much as being alive.
             handles.retain(|handle| {
                 let alive = handle.data::<WlrHandleState<W>>().is_some_and(|state| {
-                    state.lock().unwrap().window.as_ref().is_some_and(|window| {
-                        window.alive() && toplevels.iter().any(|toplevel| toplevel == window)
+                    state.lock().unwrap().window.as_ref().is_some_and(|weak| {
+                        W::upgrade(weak).is_some_and(|window| {
+                            window.alive() && toplevels.iter().any(|toplevel| toplevel == &window)
+                        })
                     })
                 });
                 if !alive && handle.is_alive() {
@@ -150,7 +154,14 @@ where
                     .iter()
                     .find(|handle| {
                         handle.data::<WlrHandleState<W>>().is_some_and(|state| {
-                            state.lock().unwrap().window.as_ref() == Some(window)
+                            state
+                                .lock()
+                                .unwrap()
+                                .window
+                                .as_ref()
+                                .and_then(W::upgrade)
+                                .as_ref()
+                                == Some(window)
                         })
                     })
                     .cloned();
@@ -339,7 +350,7 @@ where
 fn window_from_handle<W: Window + 'static>(handle: &ZwlrForeignToplevelHandleV1) -> Option<W> {
     handle
         .data::<WlrHandleState<W>>()
-        .and_then(|state| state.lock().unwrap().window.clone())
+        .and_then(|state| state.lock().unwrap().window.as_ref().and_then(W::upgrade))
 }
 
 impl<D, W> Dispatch<ZwlrForeignToplevelHandleV1, WlrHandleState<W>, D>
