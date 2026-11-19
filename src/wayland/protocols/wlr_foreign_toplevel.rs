@@ -33,13 +33,27 @@ use super::{
     toplevel_management::{ManagementWindow, ToplevelManagementHandler},
 };
 
-pub const WLR_FOREIGN_TOPLEVEL_MANAGER_VERSION: u32 = 3;
+/// Version 3 adds the `parent` event. We do not track toplevel parents in the
+/// window model, so advertising v2 is more honest than making v3 clients wait
+/// for an event that will never arrive.
+pub const WLR_FOREIGN_TOPLEVEL_MANAGER_VERSION: u32 = 2;
 
 /// Per-manager (i.e. per-client) bookkeeping: the handles handed out to that
 /// client. The window each handle belongs to lives in the handle data.
-#[derive(Default)]
-pub struct WlrManagerData {
+pub struct WlrManagerData<W: Window> {
     handles: Mutex<Vec<ZwlrForeignToplevelHandleV1>>,
+    /// Toplevels whose handle this client destroyed. The protocol forbids
+    /// handing the same toplevel to the same client again.
+    dismissed: Mutex<Vec<W>>,
+}
+
+impl<W: Window> Default for WlrManagerData<W> {
+    fn default() -> Self {
+        Self {
+            handles: Mutex::new(Vec::new()),
+            dismissed: Mutex::new(Vec::new()),
+        }
+    }
 }
 
 pub struct WlrHandleStateInner<W: Window> {
@@ -51,6 +65,9 @@ pub struct WlrHandleStateInner<W: Window> {
     /// Raw `zwlr_foreign_toplevel_handle_v1::State` values last sent.
     states: Option<Vec<u32>>,
     wl_outputs: HashSet<WlOutput>,
+    /// Whether the compositor already sent `closed`. A client destroying a
+    /// closed handle is just cleaning up, not asking to hide the toplevel.
+    closed: bool,
 }
 
 impl<W: Window> WlrHandleStateInner<W> {
@@ -61,6 +78,7 @@ impl<W: Window> WlrHandleStateInner<W> {
             app_id: String::new(),
             states: None,
             wl_outputs: HashSet::new(),
+            closed: false,
         })
     }
 }
@@ -86,7 +104,7 @@ pub trait WlrForeignToplevelHandler: ToplevelInfoHandler + Sized {
 impl<D, W> WlrForeignToplevelState<D, W>
 where
     D: GlobalDispatch<ZwlrForeignToplevelManagerV1, WlrForeignToplevelGlobalData>
-        + Dispatch<ZwlrForeignToplevelManagerV1, WlrManagerData>
+        + Dispatch<ZwlrForeignToplevelManagerV1, WlrManagerData<W>>
         + Dispatch<ZwlrForeignToplevelHandleV1, WlrHandleState<W>>
         + ToplevelInfoHandler<Window = W>
         + 'static,
@@ -122,7 +140,7 @@ where
         self.instances.retain(|instance| instance.is_alive());
 
         for instance in &self.instances {
-            let Some(manager) = instance.data::<WlrManagerData>() else {
+            let Some(manager) = instance.data::<WlrManagerData<W>>() else {
                 continue;
             };
             let Ok(client) = self.dh.get_client(instance.id()) else {
@@ -144,12 +162,24 @@ where
                     })
                 });
                 if !alive && handle.is_alive() {
+                    if let Some(state) = handle.data::<WlrHandleState<W>>() {
+                        state.lock().unwrap().closed = true;
+                    }
                     handle.closed();
                 }
                 alive
             });
 
+            // Forget dismissed toplevels once their surface is gone; while it
+            // is alive the client must not receive another handle for it.
+            let mut dismissed = manager.dismissed.lock().unwrap();
+            dismissed.retain(|window| window.alive());
+
             for window in toplevels {
+                if dismissed.iter().any(|dismissed| dismissed == window) {
+                    continue;
+                }
+
                 let existing = handles
                     .iter()
                     .find(|handle| {
@@ -273,7 +303,7 @@ impl<D, W> GlobalDispatch<ZwlrForeignToplevelManagerV1, WlrForeignToplevelGlobal
     for WlrForeignToplevelState<D, W>
 where
     D: GlobalDispatch<ZwlrForeignToplevelManagerV1, WlrForeignToplevelGlobalData>
-        + Dispatch<ZwlrForeignToplevelManagerV1, WlrManagerData>
+        + Dispatch<ZwlrForeignToplevelManagerV1, WlrManagerData<W>>
         + Dispatch<ZwlrForeignToplevelHandleV1, WlrHandleState<W>>
         + WlrForeignToplevelHandler<Window = W>
         + 'static,
@@ -287,7 +317,7 @@ where
         _global_data: &WlrForeignToplevelGlobalData,
         data_init: &mut DataInit<'_, D>,
     ) {
-        let instance = data_init.init(resource, WlrManagerData::default());
+        let instance = data_init.init(resource, WlrManagerData::<W>::default());
         state.wlr_foreign_toplevel_state().instances.push(instance);
     }
 
@@ -306,11 +336,11 @@ where
     }
 }
 
-impl<D, W> Dispatch<ZwlrForeignToplevelManagerV1, WlrManagerData, D>
+impl<D, W> Dispatch<ZwlrForeignToplevelManagerV1, WlrManagerData<W>, D>
     for WlrForeignToplevelState<D, W>
 where
     D: GlobalDispatch<ZwlrForeignToplevelManagerV1, WlrForeignToplevelGlobalData>
-        + Dispatch<ZwlrForeignToplevelManagerV1, WlrManagerData>
+        + Dispatch<ZwlrForeignToplevelManagerV1, WlrManagerData<W>>
         + Dispatch<ZwlrForeignToplevelHandleV1, WlrHandleState<W>>
         + WlrForeignToplevelHandler<Window = W>
         + 'static,
@@ -321,7 +351,7 @@ where
         _client: &Client,
         obj: &ZwlrForeignToplevelManagerV1,
         request: zwlr_foreign_toplevel_manager_v1::Request,
-        data: &WlrManagerData,
+        data: &WlrManagerData<W>,
         _dh: &DisplayHandle,
         _data_init: &mut DataInit<'_, D>,
     ) {
@@ -341,7 +371,7 @@ where
         state: &mut D,
         _client: ClientId,
         resource: &ZwlrForeignToplevelManagerV1,
-        _data: &WlrManagerData,
+        _data: &WlrManagerData<W>,
     ) {
         state.wlr_foreign_toplevel_state().remove_instance(resource);
     }
@@ -357,7 +387,7 @@ impl<D, W> Dispatch<ZwlrForeignToplevelHandleV1, WlrHandleState<W>, D>
     for WlrForeignToplevelState<D, W>
 where
     D: GlobalDispatch<ZwlrForeignToplevelManagerV1, WlrForeignToplevelGlobalData>
-        + Dispatch<ZwlrForeignToplevelManagerV1, WlrManagerData>
+        + Dispatch<ZwlrForeignToplevelManagerV1, WlrManagerData<W>>
         + Dispatch<ZwlrForeignToplevelHandleV1, WlrHandleState<W>>
         + WlrForeignToplevelHandler<Window = W>
         + ToplevelManagementHandler<Window = W>
@@ -414,17 +444,23 @@ where
         state: &mut D,
         _client: ClientId,
         resource: &ZwlrForeignToplevelHandleV1,
-        _data: &WlrHandleState<W>,
+        data: &WlrHandleState<W>,
     ) {
+        let (window, closed) = {
+            let mut data = data.lock().unwrap();
+            (data.window.take(), data.closed)
+        };
         for instance in &state.wlr_foreign_toplevel_state().instances {
-            let Some(manager) = instance.data::<WlrManagerData>() else {
+            let Some(manager) = instance.data::<WlrManagerData<W>>() else {
                 continue;
             };
-            manager
-                .handles
-                .lock()
-                .unwrap()
-                .retain(|handle| handle != resource);
+            let mut handles = manager.handles.lock().unwrap();
+            if let Some(index) = handles.iter().position(|handle| handle == resource) {
+                handles.remove(index);
+                if !closed && let Some(window) = window.as_ref().and_then(W::upgrade) {
+                    manager.dismissed.lock().unwrap().push(window);
+                }
+            }
         }
     }
 }
@@ -435,7 +471,7 @@ macro_rules! delegate_wlr_foreign_toplevel {
             smithay::reexports::wayland_protocols_wlr::foreign_toplevel::v1::server::zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1: $crate::wayland::protocols::wlr_foreign_toplevel::WlrForeignToplevelGlobalData
         ] => $crate::wayland::protocols::wlr_foreign_toplevel::WlrForeignToplevelState<Self, $window>);
         smithay::reexports::wayland_server::delegate_dispatch!($(@< $( $lt $( : $clt $(+ $dlt )* )? ),+ >)? $ty: [
-            smithay::reexports::wayland_protocols_wlr::foreign_toplevel::v1::server::zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1: $crate::wayland::protocols::wlr_foreign_toplevel::WlrManagerData
+            smithay::reexports::wayland_protocols_wlr::foreign_toplevel::v1::server::zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1: $crate::wayland::protocols::wlr_foreign_toplevel::WlrManagerData<$window>
         ] => $crate::wayland::protocols::wlr_foreign_toplevel::WlrForeignToplevelState<Self, $window>);
         smithay::reexports::wayland_server::delegate_dispatch!($(@< $( $lt $( : $clt $(+ $dlt )* )? ),+ >)? $ty: [
             smithay::reexports::wayland_protocols_wlr::foreign_toplevel::v1::server::zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1: $crate::wayland::protocols::wlr_foreign_toplevel::WlrHandleState<$window>

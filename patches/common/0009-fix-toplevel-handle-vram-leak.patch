@@ -223,10 +223,10 @@ index 2f1e630a..dd4641bf 100644
                      state.workspace_state().get_ext_workspace_handle(&workspace)
                      && let Some(output) = Output::from_resource(&output)
 diff --git a/src/wayland/protocols/wlr_foreign_toplevel.rs b/src/wayland/protocols/wlr_foreign_toplevel.rs
-index bb240624..3d96efa4 100644
+index cd5d0005..f342b522 100644
 --- a/src/wayland/protocols/wlr_foreign_toplevel.rs
 +++ b/src/wayland/protocols/wlr_foreign_toplevel.rs
-@@ -43,7 +43,9 @@ pub struct WlrManagerData {
+@@ -57,7 +57,9 @@ impl<W: Window> Default for WlrManagerData<W> {
  }
  
  pub struct WlrHandleStateInner<W: Window> {
@@ -237,7 +237,7 @@ index bb240624..3d96efa4 100644
      title: String,
      app_id: String,
      /// Raw `zwlr_foreign_toplevel_handle_v1::State` values last sent.
-@@ -54,7 +56,7 @@ pub struct WlrHandleStateInner<W: Window> {
+@@ -71,7 +73,7 @@ pub struct WlrHandleStateInner<W: Window> {
  impl<W: Window> WlrHandleStateInner<W> {
      fn new(window: W) -> WlrHandleState<W> {
          Mutex::new(WlrHandleStateInner {
@@ -246,7 +246,7 @@ index bb240624..3d96efa4 100644
              title: String::new(),
              app_id: String::new(),
              states: None,
-@@ -135,8 +137,10 @@ where
+@@ -153,8 +155,10 @@ where
              // being in `toplevels` matters as much as being alive.
              handles.retain(|handle| {
                  let alive = handle.data::<WlrHandleState<W>>().is_some_and(|state| {
@@ -259,7 +259,7 @@ index bb240624..3d96efa4 100644
                      })
                  });
                  if !alive && handle.is_alive() {
-@@ -150,7 +154,14 @@ where
+@@ -180,7 +184,14 @@ where
                      .iter()
                      .find(|handle| {
                          handle.data::<WlrHandleState<W>>().is_some_and(|state| {
@@ -275,7 +275,7 @@ index bb240624..3d96efa4 100644
                          })
                      })
                      .cloned();
-@@ -339,7 +350,7 @@ where
+@@ -369,7 +380,7 @@ where
  fn window_from_handle<W: Window + 'static>(handle: &ZwlrForeignToplevelHandleV1) -> Option<W> {
      handle
          .data::<WlrHandleState<W>>()
@@ -284,3 +284,14 @@ index bb240624..3d96efa4 100644
  }
  
  impl<D, W> Dispatch<ZwlrForeignToplevelHandleV1, WlrHandleState<W>, D>
+@@ -446,8 +457,8 @@ where
+             let mut handles = manager.handles.lock().unwrap();
+             if let Some(index) = handles.iter().position(|handle| handle == resource) {
+                 handles.remove(index);
+-                if !closed && let Some(window) = &window {
+-                    manager.dismissed.lock().unwrap().push(window.clone());
++                if !closed && let Some(window) = window.as_ref().and_then(W::upgrade) {
++                    manager.dismissed.lock().unwrap().push(window);
+                 }
+             }
+         }
