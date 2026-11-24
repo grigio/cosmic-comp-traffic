@@ -628,7 +628,10 @@ jobs:
           echo "assets: ${assets[*]}"
 
           # Mirror the upstream tag, so the release points at the upstream commit
-          # instead of at a random commit of this fork.
+          # instead of at a random commit of this fork. Annotated tags need an
+          # identity, which hosted runners do not configure by default.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if ! git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             if [[ -n $SOURCE_REF ]]; then
               echo "creating pre-release tag $TAG at $(git rev-parse --short HEAD)"
