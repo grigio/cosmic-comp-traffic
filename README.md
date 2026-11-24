@@ -170,8 +170,8 @@ The CI runs:
 - **nix-build** - `nix build .#default` (uses the hash in `cargoVendorHash.nix`)
 
 The release workflow computes the effective patch list once and rewrites the
-RPM spec's `PatchN:` / `%patch N` blocks and the release notes from it. RPM
-patches are no longer declared by hand in the spec. Arch `pkgrel` and RPM
+RPM spec's `PatchN:` declarations and `git apply` lines, and the release notes
+from it. RPM patches are no longer declared by hand in the spec. Arch `pkgrel` and RPM
 `Release` come from the single `release-counter` file (CI fails if it is not
 greater than the highest published build); bump that file when a rebuild is
 needed. Before building a pre-release from an upstream ref, the workflow also

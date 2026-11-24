@@ -68,19 +68,20 @@ patches applied to provide traffic-light style window decorations.
 
 %prep
 %setup -q -n %{cosmic_source_dir}
-# Explicit patch application rather than %autosetup: release.yml regenerates
-# both the declarations above and this block from the same effective list.
+# Explicit patch application: release.yml regenerates both the declarations
+# above and this block from the same effective list. git apply is used instead of
+# %patch so the %setup -n directory is honoured for arbitrary source refs.
 # >>> RPM PATCH APPLICATION
-%patch 0 -p1
-%patch 1 -p1
-%patch 2 -p1
-%patch 3 -p1
-%patch 4 -p1
-%patch 5 -p1
-%patch 6 -p1
-%patch 7 -p1
-%patch 8 -p1
-%patch 9 -p1
+git apply --whitespace=nowarn -p1 %{_sourcedir}/0001-macos-traffic-light-decorations.patch
+git apply --whitespace=nowarn -p1 %{_sourcedir}/0002-wlr-foreign-toplevel-management.patch
+git apply --whitespace=nowarn -p1 %{_sourcedir}/0003-three-finger-workspace-swipe.patch
+git apply --whitespace=nowarn -p1 %{_sourcedir}/0004-alt-tab-window-cycle.patch
+git apply --whitespace=nowarn -p1 %{_sourcedir}/0005-wlr-gamma-control.patch
+git apply --whitespace=nowarn -p1 %{_sourcedir}/0006-live-theme-reload.patch
+git apply --whitespace=nowarn -p1 %{_sourcedir}/0007-send-frames-missing-workspace-set.patch
+git apply --whitespace=nowarn -p1 %{_sourcedir}/0008-output-removal-without-unwrap.patch
+git apply --whitespace=nowarn -p1 %{_sourcedir}/0009-fix-toplevel-handle-vram-leak.patch
+git apply --whitespace=nowarn -p1 %{_sourcedir}/0010-fix-dmabuf-import-feedback.patch
 # <<< RPM PATCH APPLICATION
 
 # Use thin LTO instead of fat LTO for faster builds

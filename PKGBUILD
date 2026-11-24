@@ -34,7 +34,9 @@ depends=(
   libxkbcommon
   mesa
   pixman
-  systemd-libs
+  # Both Arch (via systemd-libs) and Artix (via libudev) provide this soname;
+  # it is the only library from systemd-libs that cosmic-comp actually links.
+  'libudev.so=1-64'
   wayland
 )
 makedepends=(
