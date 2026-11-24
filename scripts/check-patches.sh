@@ -86,7 +86,7 @@ min_version=${MIN_VERSION:-}
 if [[ -z $min_version ]]; then
   min_version=$(sed -n "s/^[[:space:]]*MIN_VERSION:[[:space:]]*'\([^']*\)'.*/\1/p" \
     .github/workflows/release.yml | head -n 1)
-  min_version=${min_version:-1.11.0}
+  min_version=${min_version:-1.12.0}
 fi
 
 tags=("${selected[@]}")
@@ -109,8 +109,15 @@ if (( ${#tags[@]} == 0 )) && (( ${#extra_refs[@]} == 0 )); then
 fi
 
 if (( ${#tags[@]} == 0 )) && (( ${#extra_refs[@]} == 0 )); then
-  echo "no supported tags found (MIN_VERSION=$min_version)" >&2
-  exit 1
+  if (( offline )); then
+    echo "no local tags >= $min_version and no --ref given; nothing to check" >&2
+    exit 0
+  fi
+  # No upstream 1.12.x tag exists yet: validate against upstream master, which
+  # is what the common series is rebased onto.
+  echo "no supported tags >= $min_version; checking upstream master instead"
+  git fetch --no-tags --quiet "$upstream_url" master
+  extra_refs+=(FETCH_HEAD)
 fi
 
 # Normalize "1.11.0" and "epoch-1.11.0" to the same tag name.

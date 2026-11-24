@@ -25,8 +25,8 @@ override substituted, plus any version-only extras. For `epoch-1.11.0` that also
 includes `0009-clippy-needless-bool.patch`. Arch, RPM and the published release
 notes are all generated from that same list, so no patch is silently omitted.
 
-Support for `epoch-1.10.0` was dropped: packages are built for `epoch-1.11.0`
-and newer tags, plus pre-releases built from upstream master.
+Support for `epoch-1.11.0` and older was dropped: packages are built for
+`epoch-1.12.0` and newer tags, plus pre-releases built from upstream master.
 
 The Nix flake and plain `cargo build` use the in-tree `src/` snapshot, which is
 kept in sync with the common series by `scripts/check-src-sync.sh` (also run in

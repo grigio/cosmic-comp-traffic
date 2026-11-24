@@ -47,10 +47,11 @@ concurrency:
 
 env:
   UPSTREAM_REPO: pop-os/cosmic-comp
-  # Oldest upstream tag that gets a package. Support for epoch-1.10.0 was
-  # dropped; the oldest build target is epoch-1.11.0 (plus upstream master
-  # pre-releases). Keep in sync with the fallback in scripts/check-patches.sh.
-  MIN_VERSION: '1.11.0'
+  # Oldest upstream tag that gets a package. The common patch series targets
+  # upstream master (1.12.x) and no longer applies to epoch-1.11.0, so only
+  # 1.12.0+ tags and master pre-releases are built. Keep in sync with the
+  # fallback in scripts/check-patches.sh.
+  MIN_VERSION: '1.12.0'
 
 jobs:
   discover:

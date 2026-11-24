@@ -49,8 +49,12 @@ jobs:
       - name: Install rustfmt
         run: rustup component add rustfmt
 
+      - name: Fetch upstream master for patch validation
+        run: git fetch --no-tags --quiet https://github.com/pop-os/cosmic-comp.git master
+
       - name: Validate patch series and application
-        run: ./scripts/check-patches.sh --fmt
+        # The common series targets upstream master (1.12.x), not old tags.
+        run: ./scripts/check-patches.sh --fmt --ref FETCH_HEAD
 
   nix-fmt:
     name: Nix format check
