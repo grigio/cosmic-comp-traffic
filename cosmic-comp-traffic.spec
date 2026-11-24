@@ -69,8 +69,9 @@ patches applied to provide traffic-light style window decorations.
 %prep
 %setup -q -n %{cosmic_source_dir}
 # Explicit patch application: release.yml regenerates both the declarations
-# above and this block from the same effective list. git apply is used instead of
-# %patch so the %setup -n directory is honoured for arbitrary source refs.
+# above and this block from the same effective list. git apply is used instead
+# of the RPM patch macro so the setup -n directory is honoured for arbitrary
+# source refs.
 # >>> RPM PATCH APPLICATION
 git apply --whitespace=nowarn -p1 %{_sourcedir}/0001-macos-traffic-light-decorations.patch
 git apply --whitespace=nowarn -p1 %{_sourcedir}/0002-wlr-foreign-toplevel-management.patch
