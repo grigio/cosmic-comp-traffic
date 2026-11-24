@@ -463,7 +463,7 @@ jobs:
           declarations = "\n".join(
               f"Patch{i}:         {name}" for i, name in enumerate(names)
           )
-          applications = "\n".join(f"%patch{i} -p1" for i in range(len(names)))
+          applications = "\n".join(f"%patch {i} -p1" for i in range(len(names)))
 
           text, n = re.subn(
               r"(# >>> RPM PATCH DECLARATIONS).*?(# <<< RPM PATCH DECLARATIONS)",

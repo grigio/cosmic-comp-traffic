@@ -71,16 +71,16 @@ patches applied to provide traffic-light style window decorations.
 # Explicit patch application rather than %autosetup: release.yml regenerates
 # both the declarations above and this block from the same effective list.
 # >>> RPM PATCH APPLICATION
-%patch0 -p1
-%patch1 -p1
-%patch2 -p1
-%patch3 -p1
-%patch4 -p1
-%patch5 -p1
-%patch6 -p1
-%patch7 -p1
-%patch8 -p1
-%patch9 -p1
+%patch 0 -p1
+%patch 1 -p1
+%patch 2 -p1
+%patch 3 -p1
+%patch 4 -p1
+%patch 5 -p1
+%patch 6 -p1
+%patch 7 -p1
+%patch 8 -p1
+%patch 9 -p1
 # <<< RPM PATCH APPLICATION
 
 # Use thin LTO instead of fat LTO for faster builds
