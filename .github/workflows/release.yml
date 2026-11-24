@@ -266,6 +266,7 @@ jobs:
           SOURCE_REF: ${{ matrix.source_ref }}
         run: |
           set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           # check-patches.sh needs the ref locally; FETCH_HEAD works for both
           # branch names and SHAs and avoids assuming a local ref name.
           git fetch --no-tags --quiet "https://github.com/$UPSTREAM_REPO.git" "$SOURCE_REF"

@@ -90,7 +90,9 @@ if [[ -z $min_version ]]; then
 fi
 
 tags=("${selected[@]}")
-if (( ${#tags[@]} == 0 )); then
+# With --ref and no explicit tags, check only the ref(s): the common series
+# tracks upstream master and is not necessarily applicable to old release tags.
+if (( ${#tags[@]} == 0 )) && (( ${#extra_refs[@]} == 0 )); then
   while IFS= read -r tag; do
     version=${tag#epoch-}
     if (( include_rc )); then
@@ -106,7 +108,7 @@ if (( ${#tags[@]} == 0 )); then
   done < <(git tag --list 'epoch-*' | sort -V)
 fi
 
-if (( ${#tags[@]} == 0 )); then
+if (( ${#tags[@]} == 0 )) && (( ${#extra_refs[@]} == 0 )); then
   echo "no supported tags found (MIN_VERSION=$min_version)" >&2
   exit 1
 fi
