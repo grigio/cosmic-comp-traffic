@@ -50,11 +50,13 @@ jobs:
         run: rustup component add rustfmt
 
       - name: Fetch upstream master for patch validation
-        run: git fetch --no-tags --quiet https://github.com/pop-os/cosmic-comp.git master
+        # Use a named ref: check-patches.sh fetches tags itself, which would
+        # otherwise overwrite FETCH_HEAD before the ref is checked out.
+        run: git fetch --no-tags --quiet https://github.com/pop-os/cosmic-comp.git master:refs/remotes/upstream/master
 
       - name: Validate patch series and application
         # The common series targets upstream master (1.12.x), not old tags.
-        run: ./scripts/check-patches.sh --fmt --ref FETCH_HEAD
+        run: ./scripts/check-patches.sh --fmt --ref refs/remotes/upstream/master
 
   nix-fmt:
     name: Nix format check

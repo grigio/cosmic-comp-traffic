@@ -163,11 +163,6 @@ jobs:
               return highest
 
           highest = max_published_build()
-          if counter <= highest:
-              raise SystemExit(
-                  f"release-counter {counter} must exceed published build {highest}; "
-                  "bump release-counter before rebuilding"
-              )
 
           # Pre-release from an arbitrary upstream ref (no upstream tag exists yet).
           # The release tag is created in this repo at the dispatched ref, and the
@@ -179,6 +174,11 @@ jobs:
                       f"with source_ref, tag must be epoch-X.Y.Z-rc.N (got {input_tag!r})"
                   )
               base, rc = m.group(1), m.group(2)
+              if counter <= highest:
+                  raise SystemExit(
+                      f"release-counter {counter} must exceed published build {highest}; "
+                      "bump release-counter before rebuilding"
+                  )
               emit([{
                   "tag": input_tag,
                   "version": f"{base}.rc{rc}",
@@ -234,6 +234,11 @@ jobs:
               "patch_files": " ".join(effective_patches(version)),
               "build_number": counter,
           } for tag, version in selected]
+          if matrix and counter <= highest:
+              raise SystemExit(
+                  f"release-counter {counter} must exceed published build {highest}; "
+                  "bump release-counter before rebuilding"
+              )
           emit(matrix, latest_tag)
           PY
 

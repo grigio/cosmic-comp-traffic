@@ -13,9 +13,14 @@ base=${SRC_SYNC_BASE:-0681eaf6}
 if ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null; then
   # CI checkouts only contain the fork's history, not the upstream base commit.
   echo "fetching source base $base from upstream"
+  # Fetch by branch name: GitHub does not allow fetching an arbitrary SHA.
   if ! git fetch --quiet --no-tags \
-      "${UPSTREAM_URL:-https://github.com/pop-os/cosmic-comp.git}" "$base"; then
-    echo "unknown source base: $base" >&2
+      "${UPSTREAM_URL:-https://github.com/pop-os/cosmic-comp.git}" master; then
+    echo "failed to fetch upstream master for source base $base" >&2
+    exit 1
+  fi
+  if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+    echo "source base $base is not in upstream master history" >&2
     exit 1
   fi
 fi
