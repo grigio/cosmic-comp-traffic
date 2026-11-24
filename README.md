@@ -1,5 +1,7 @@
 # cosmic-comp-traffic
 
+![cosmic-comp-traffic improved cosmic-comp](./cosmic-comp-traffic.png)
+
 A fork of [pop-os/cosmic-comp](https://github.com/pop-os/cosmic-comp) with macOS-style traffic-light window decorations and additional patches.
 
 This is the COSMIC compositor with traffic-light close/minimize/maximize buttons on window decorations, plus several quality-of-life patches.
