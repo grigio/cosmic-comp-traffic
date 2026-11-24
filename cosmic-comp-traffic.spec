@@ -15,7 +15,11 @@ License:        GPL-3.0-only
 URL:            https://github.com/grigio/cosmic-comp-traffic
 Source0:        https://github.com/pop-os/cosmic-comp/archive/refs/tags/epoch-%{version}.tar.gz#/%{cosmic_source_tar}
 
-# Patches from the cosmic-comp-traffic fork (copied to SOURCES by the build script)
+# Patches from the cosmic-comp-traffic fork (copied to SOURCES by the build script).
+# The block below is the default for local rpmbuilds. release.yml rewrites it
+# from the effective patch list (series + version overrides/extras) so no patch
+# is silently left out; do not edit the marker comments.
+# >>> RPM PATCH DECLARATIONS
 Patch0:         0001-macos-traffic-light-decorations.patch
 Patch1:         0002-wlr-foreign-toplevel-management.patch
 Patch2:         0003-three-finger-workspace-swipe.patch
@@ -24,6 +28,9 @@ Patch4:         0005-wlr-gamma-control.patch
 Patch5:         0006-live-theme-reload.patch
 Patch6:         0007-send-frames-missing-workspace-set.patch
 Patch7:         0008-output-removal-without-unwrap.patch
+Patch8:         0009-fix-toplevel-handle-vram-leak.patch
+Patch9:         0010-fix-dmabuf-import-feedback.patch
+# <<< RPM PATCH DECLARATIONS
 
 BuildRequires:  cargo
 BuildRequires:  rust
@@ -60,7 +67,21 @@ This is a fork of the upstream cosmic-comp from pop-os/cosmic-comp with
 patches applied to provide traffic-light style window decorations.
 
 %prep
-%autosetup -n %{cosmic_source_dir} -p1
+%setup -q -n %{cosmic_source_dir}
+# Explicit patch application rather than %autosetup: release.yml regenerates
+# both the declarations above and this block from the same effective list.
+# >>> RPM PATCH APPLICATION
+%patch0 -p1
+%patch1 -p1
+%patch2 -p1
+%patch3 -p1
+%patch4 -p1
+%patch5 -p1
+%patch6 -p1
+%patch7 -p1
+%patch8 -p1
+%patch9 -p1
+# <<< RPM PATCH APPLICATION
 
 # Use thin LTO instead of fat LTO for faster builds
 sed -i 's/lto = "fat"/lto = "thin"/' Cargo.toml

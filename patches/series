@@ -15,3 +15,4 @@
 0007-send-frames-missing-workspace-set.patch
 0008-output-removal-without-unwrap.patch
 0009-fix-toplevel-handle-vram-leak.patch
+0010-fix-dmabuf-import-feedback.patch

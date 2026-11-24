@@ -47,8 +47,10 @@ concurrency:
 
 env:
   UPSTREAM_REPO: pop-os/cosmic-comp
-  # Oldest upstream tag that gets a package (the version this fork started from).
-  MIN_VERSION: '1.10.0'
+  # Oldest upstream tag that gets a package. Support for epoch-1.10.0 was
+  # dropped; the oldest build target is epoch-1.11.0 (plus upstream master
+  # pre-releases). Keep in sync with the fallback in scripts/check-patches.sh.
+  MIN_VERSION: '1.11.0'
 
 jobs:
   discover:
@@ -59,6 +61,10 @@ jobs:
       count: ${{ steps.plan.outputs.count }}
       latest_tag: ${{ steps.plan.outputs.latest_tag }}
     steps:
+      # Needed to read patches/series and the version-specific patch dirs when
+      # computing the effective patch list passed to every build/publish job.
+      - uses: actions/checkout@v4
+
       - name: Plan builds
         id: plan
         env:
@@ -70,6 +76,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, os, re, subprocess
+          from pathlib import Path
 
           upstream = os.environ["UPSTREAM_REPO"]
           min_version = os.environ.get("MIN_VERSION", "0.0.0")
@@ -88,6 +95,79 @@ jobs:
                   out.write(f"latest_tag={latest_tag}\n")
               print(f"{len(matrix)} build(s): {json.dumps(matrix)}")
 
+          def effective_patches(version):
+              """Ordered patch paths for this version, one per applied patch.
+
+              Mirrors PKGBUILD / check-patches.sh: patches/series defines the
+              order, patches/<version>/<name> replaces the common patch of the
+              same name, and version-only patches are applied afterwards.
+              A pre-release from an arbitrary upstream ref passes version=None
+              so it uses the common series only (no stale version overrides).
+              """
+              common = Path("patches/common")
+              vdir = Path("patches") / version if version else None
+              series = Path("patches/series")
+              if series.is_file():
+                  names = ["".join(line.split("#", 1)[0].split())
+                           for line in series.read_text().splitlines()]
+                  names = [name for name in names if name]
+              else:
+                  names = sorted(p.name for p in common.glob("*.patch"))
+              result, seen = [], set()
+              for name in names:
+                  patch = common / name
+                  if not patch.is_file():
+                      raise SystemExit(f"series lists a missing patch: {name}")
+                  if vdir and (vdir / name).is_file():
+                      patch = vdir / name
+                  result.append(str(patch))
+                  seen.add(name)
+              if vdir and vdir.is_dir():
+                  for patch in sorted(vdir.glob("*.patch")):
+                      if patch.name not in seen:
+                          result.append(str(patch))
+              return result
+
+          # A single explicit counter replaces the git-history-derived pkgrel /
+          # RPM Release values: a rebase could make those go backwards.
+          counter = int(Path("release-counter").read_text().strip())
+          if counter < 1:
+              raise SystemExit(f"release-counter must be >= 1 (got {counter})")
+
+          release_tags = subprocess.run(
+              ["gh", "release", "list", "--repo", os.environ["GITHUB_REPOSITORY"],
+               "--limit", "200", "--json", "tagName", "--jq", ".[].tagName"],
+              capture_output=True, text=True, check=False,
+          )
+          existing = set()
+          if release_tags.returncode == 0:
+              existing = {line.strip() for line in release_tags.stdout.splitlines() if line.strip()}
+
+          def max_published_build():
+              highest = 0
+              for tag in existing:
+                  assets = subprocess.run(
+                      ["gh", "release", "view", tag,
+                       "--repo", os.environ["GITHUB_REPOSITORY"],
+                       "--json", "assets", "--jq", ".assets[].name"],
+                      capture_output=True, text=True, check=False,
+                  )
+                  if assets.returncode != 0:
+                      continue
+                  for name in assets.stdout.splitlines():
+                      match = (re.search(r"-(\d+)-x86_64\.pkg\.tar\.zst$", name)
+                               or re.search(r"-(\d+)(?:\.[^.]+)*\.x86_64\.rpm$", name))
+                      if match:
+                          highest = max(highest, int(match.group(1)))
+              return highest
+
+          highest = max_published_build()
+          if counter <= highest:
+              raise SystemExit(
+                  f"release-counter {counter} must exceed published build {highest}; "
+                  "bump release-counter before rebuilding"
+              )
+
           # Pre-release from an arbitrary upstream ref (no upstream tag exists yet).
           # The release tag is created in this repo at the dispatched ref, and the
           # GitHub "Latest" marker is left on the newest upstream release.
@@ -104,6 +184,8 @@ jobs:
                   "rpm_version": f"{base}~rc{rc}",
                   "source_ref": source_ref,
                   "prerelease": True,
+                  "patch_files": " ".join(effective_patches(None)),
+                  "build_number": counter,
               }], "")
               raise SystemExit(0)
 
@@ -120,15 +202,6 @@ jobs:
               match = re.fullmatch(r"epoch-(\d+\.\d+\.\d+)", tag)
               if match:
                   tags[tag] = match.group(1)
-
-          existing = set()
-          rel = subprocess.run(
-              ["gh", "release", "list", "--repo", os.environ["GITHUB_REPOSITORY"],
-               "--limit", "200", "--json", "tagName", "--jq", ".[].tagName"],
-              capture_output=True, text=True,
-          )
-          if rel.returncode == 0:
-              existing = {line.strip() for line in rel.stdout.splitlines() if line.strip()}
 
           supported = sorted(
               ((t, v) for t, v in tags.items() if vkey(v) >= vkey(min_version)),
@@ -157,6 +230,8 @@ jobs:
               "rpm_version": version,
               "source_ref": "",
               "prerelease": False,
+              "patch_files": " ".join(effective_patches(version)),
+              "build_number": counter,
           } for tag, version in selected]
           emit(matrix, latest_tag)
           PY
@@ -183,8 +258,18 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          # full history: pkgrel is derived from the commit count of PKGBUILD+patches
           fetch-depth: 0
+
+      - name: Verify patches apply to pre-release ref
+        if: matrix.prerelease
+        env:
+          SOURCE_REF: ${{ matrix.source_ref }}
+        run: |
+          set -euo pipefail
+          # check-patches.sh needs the ref locally; FETCH_HEAD works for both
+          # branch names and SHAs and avoids assuming a local ref name.
+          git fetch --no-tags --quiet "https://github.com/$UPSTREAM_REPO.git" "$SOURCE_REF"
+          ./scripts/check-patches.sh --offline --ref FETCH_HEAD
 
       - name: Install build dependencies
         run: |
@@ -212,13 +297,14 @@ jobs:
         env:
           COSMIC_COMP_VERSION: ${{ matrix.version }}
           COSMIC_COMP_SOURCE_REF: ${{ matrix.source_ref }}
+          PKGREL: ${{ matrix.build_number }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          pkgrel=$(git rev-list --count HEAD -- PKGBUILD patches .github/workflows/release.yml)
-          (( pkgrel >= 1 )) || pkgrel=1
+          pkgrel=$PKGREL
+          (( pkgrel >= 1 )) || { echo "invalid pkgrel: $pkgrel" >&2; exit 1; }
           echo "building cosmic-comp $COSMIC_COMP_VERSION (pkgrel $pkgrel)"
 
           # Build in a scratch directory: makepkg's src/ would otherwise collide
@@ -226,7 +312,7 @@ jobs:
           build_dir=/tmp/pkgbuild
           rm -rf "$build_dir"
           mkdir -p "$build_dir" /tmp/pkgout
-          cp PKGBUILD "$build_dir/"
+          cp PKGBUILD release-counter "$build_dir/"
           cp -r patches "$build_dir/"
 
           useradd -m builder 2>/dev/null || true
@@ -349,35 +435,73 @@ jobs:
 
       - name: Copy spec file and patches
         env:
-          ARCH_VERSION: ${{ matrix.version }}
+          PATCH_FILES: ${{ matrix.patch_files }}
         run: |
           set -euo pipefail
-          cp "$GITHUB_WORKSPACE/cosmic-comp-traffic.spec" /home/builder/rpmbuild/SPECS/
-          # A version-specific patch replaces the common one with the same name.
-          for patch in "$GITHUB_WORKSPACE"/patches/common/*.patch; do
-            name=$(basename "$patch")
-            if [[ -f "$GITHUB_WORKSPACE/patches/$ARCH_VERSION/$name" ]]; then
-              patch="$GITHUB_WORKSPACE/patches/$ARCH_VERSION/$name"
-            fi
-            cp "$patch" /home/builder/rpmbuild/SOURCES/
+          spec=/home/builder/rpmbuild/SPECS/cosmic-comp-traffic.spec
+          sources=/home/builder/rpmbuild/SOURCES
+          cp "$GITHUB_WORKSPACE/cosmic-comp-traffic.spec" "$spec"
+
+          # Copy exactly the effective patch set: common patches, version
+          # overrides, and version extras (e.g. the 1.11.0 clippy patch).
+          read -ra patches <<< "$PATCH_FILES"
+          (( ${#patches[@]} )) || { echo "no patches to apply" >&2; exit 1; }
+          for patch in "${patches[@]}"; do
+            cp "$GITHUB_WORKSPACE/$patch" "$sources/"
           done
+
+          # rpmbuild only applies what the spec declares. Rewrite the two
+          # generated blocks so declarations and %patch lines always match the
+          # files copied above -- for tags and master pre-releases alike.
+          python3 - "$spec" "${patches[@]}" <<'PY'
+          import re, sys
+
+          path = sys.argv[1]
+          names = [p.replace("\\", "/").rsplit("/", 1)[-1] for p in sys.argv[2:]]
+          text = open(path).read()
+          declarations = "\n".join(
+              f"Patch{i}:         {name}" for i, name in enumerate(names)
+          )
+          applications = "\n".join(f"%patch{i} -p1" for i in range(len(names)))
+
+          text, n = re.subn(
+              r"(# >>> RPM PATCH DECLARATIONS).*?(# <<< RPM PATCH DECLARATIONS)",
+              lambda m: f"{m.group(1)}\n{declarations}\n{m.group(2)}",
+              text,
+              flags=re.S,
+          )
+          if n != 1:
+              raise SystemExit("missing RPM patch declaration markers in spec")
+          text, n = re.subn(
+              r"(# >>> RPM PATCH APPLICATION).*?(# <<< RPM PATCH APPLICATION)",
+              lambda m: f"{m.group(1)}\n{applications}\n{m.group(2)}",
+              text,
+              flags=re.S,
+          )
+          if n != 1:
+              raise SystemExit("missing RPM patch application markers in spec")
+          with open(path, "w") as f:
+              f.write(text)
+          print(f"spec declares/applies {len(names)} patches")
+          PY
+
           # Replace build date placeholder with current date in RPM format
           build_date=$(date +"%a %b %d %Y")
-          sed -i "s/@@BUILD_DATE@@/$build_date/" /home/builder/rpmbuild/SPECS/cosmic-comp-traffic.spec
+          sed -i "s/@@BUILD_DATE@@/$build_date/" "$spec"
           chown -R builder:builder /home/builder/rpmbuild
 
       - name: Build RPM package
         env:
           VERSION: ${{ matrix.rpm_version }}
           SOURCE_REF: ${{ matrix.source_ref }}
+          RELEASE_NUMBER: ${{ matrix.build_number }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          # Calculate release number from commit count (similar to pkgrel)
-          release=$(git rev-list --count HEAD -- cosmic-comp-traffic.spec patches .github/workflows/release.yml)
-          (( release >= 1 )) || release=1
+          release=$RELEASE_NUMBER
+          (( release >= 1 )) || { echo "invalid release: $release" >&2; exit 1; }
           echo "building cosmic-comp-traffic $VERSION (release $release)"
 
           # Quotes are embedded in the string passed to the builder's shell so
@@ -490,6 +614,7 @@ jobs:
           SOURCE_REF: ${{ matrix.source_ref }}
           PRERELEASE: ${{ matrix.prerelease }}
           LATEST_TAG: ${{ needs.discover.outputs.latest_tag }}
+          PATCH_FILES: ${{ matrix.patch_files }}
           FORCE: ${{ inputs.force || github.event_name == 'push' }}
         run: |
           set -euo pipefail
@@ -513,10 +638,12 @@ jobs:
             fi
           fi
 
-          patch_list=$(
-            { ls patches/common/*.patch 2>/dev/null; ls "patches/$VERSION"/*.patch 2>/dev/null; } |
-              sed 's|^|* `|; s|$|`|' || true
-          )
+          # List only the patches actually applied by the Arch/RPM builds.
+          # PATCH_FILES is the effective list computed in discover (series with
+          # version overrides substituted, plus version extras), not a glob of
+          # everything under patches/, so unused/overridden files are omitted.
+          read -ra effective_patches <<< "$PATCH_FILES"
+          patch_list=$(printf '%s\n' "${effective_patches[@]}" | sed 's|^|* `|; s|$|`|')
 
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "release $TAG exists, uploading assets"
@@ -599,15 +726,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ matrix.tag }}
           VERSION: ${{ matrix.version }}
+          PKGREL: ${{ matrix.build_number }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          # Same derivation as the build step, so "older" means strictly below
-          # the pkgrel this run just uploaded.
-          pkgrel=$(git rev-list --count HEAD -- PKGBUILD patches .github/workflows/release.yml)
-          (( pkgrel >= 1 )) || pkgrel=1
+          # Same counter as the build step, so "older" means strictly below the
+          # pkgrel this run just uploaded.
+          pkgrel=$PKGREL
 
           # Rebuilding a tag used to leave every previous pkgrel behind, so
           # `gh release download -p '*.pkg.tar.zst'` fetched several builds.
@@ -648,14 +774,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ matrix.tag }}
           VERSION: ${{ matrix.rpm_version }}
+          RELEASE_NUMBER: ${{ matrix.build_number }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          # Same derivation as the build step
-          release=$(git rev-list --count HEAD -- cosmic-comp-traffic.spec patches .github/workflows/release.yml)
-          (( release >= 1 )) || release=1
+          # Same counter as the build step
+          release=$RELEASE_NUMBER
 
           stale=$(
             gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \

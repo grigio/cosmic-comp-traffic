@@ -5,7 +5,9 @@ use crate::{
     shell::Shell,
     state::BackendData,
     utils::{env::dev_var, global::remove_global_with_timer, prelude::*},
-    wayland::protocols::{drm::WlDrmState, output_power::OutputPowerState},
+    wayland::protocols::{
+        drm::WlDrmState, gamma_control::GammaControlState, output_power::OutputPowerState,
+    },
 };
 
 use anyhow::{self, Context, Result};
@@ -56,7 +58,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::Path,
     sync::{Arc, RwLock, atomic::AtomicBool},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 mod device;
@@ -83,6 +85,8 @@ pub struct KmsState {
 
     pub syncobj_state: Option<DrmSyncobjState>,
     pub dmabuf_global: Option<DmabufGlobal>,
+    /// Set when the format blacklist changes and the default feedback needs rebuilding.
+    feedback_dirty: bool,
 }
 
 pub struct KmsGuard<'a> {
@@ -141,6 +145,7 @@ pub fn init_backend(
 
         syncobj_state: None,
         dmabuf_global: None,
+        feedback_dirty: false,
     });
 
     // manually add already present gpus
@@ -542,9 +547,8 @@ impl State {
                 .drm_devices
                 .values()
                 .find(|dev| dev.inner.render_node == node)
-                .unwrap()
-                .texture_formats
-                .clone();
+                .map(|dev| dev.usable_formats(&dev.texture_formats))
+                .unwrap_or_default();
             let feedback = DmabufFeedbackBuilder::new(node.dev_id(), primary_formats.clone())
                 .build()
                 .unwrap();
@@ -642,46 +646,72 @@ impl State {
         Ok(())
     }
 
-    fn update_default_feedback(&mut self) {
+    pub(crate) fn update_default_feedback(&mut self) {
+        let (primary_node, global) = {
+            let kms = self.backend.kms();
+            (*kms.primary_node.read().unwrap(), kms.dmabuf_global)
+        };
+        let (Some(primary_node), Some(global)) = (primary_node, global) else {
+            return;
+        };
+
+        // Expire blacklisted formats before rebuilding, and skip the whole
+        // rebuild when nothing changed: failed imports call this on a hot path.
         let kms = self.backend.kms();
-        let primary_node = kms.primary_node.read().unwrap();
-        if let Some(primary_node) = *primary_node {
-            let primary_formats = kms
-                .drm_devices
-                .values()
-                .find(|dev| dev.inner.render_node == primary_node)
-                .unwrap()
-                .texture_formats
-                .clone();
+        let now = Instant::now();
+        let mut recovered = false;
+        for device in kms.drm_devices.values_mut() {
+            recovered |= device.maybe_recover_formats(now);
+        }
+        if !recovered && !kms.feedback_dirty {
+            return;
+        }
+        kms.feedback_dirty = false;
 
-            let mut feedback =
-                DmabufFeedbackBuilder::new(primary_node.dev_id(), primary_formats.clone())
-                    .add_preference_tranche(
-                        primary_node.dev_id(),
-                        TrancheFlags::Sampling,
-                        primary_formats.iter().cloned(),
-                        3..=6,
-                    );
-            for dev in kms
-                .drm_devices
-                .values()
-                .filter(|dev| dev.inner.render_node != primary_node)
-            {
-                feedback = feedback.add_preference_tranche(
-                    dev.inner.render_node.dev_id(),
+        let primary_formats = kms
+            .drm_devices
+            .values()
+            .find(|dev| dev.inner.render_node == primary_node)
+            .map(|dev| dev.usable_formats(&dev.texture_formats));
+        let Some(primary_formats) = primary_formats else {
+            return;
+        };
+
+        let mut feedback =
+            DmabufFeedbackBuilder::new(primary_node.dev_id(), primary_formats.clone())
+                .add_preference_tranche(
+                    primary_node.dev_id(),
                     TrancheFlags::Sampling,
-                    dev.texture_formats.iter().cloned(),
-                    6..=6,
+                    primary_formats.iter().cloned(),
+                    3..=6,
                 );
-            }
-
-            let default_feedback = feedback.build().unwrap();
-            self.common.dmabuf_state.set_default_feedback(
-                kms.dmabuf_global
-                    .as_ref()
-                    .expect("Primary node but no dmabuf global?"),
-                &default_feedback,
+        for dev in kms
+            .drm_devices
+            .values()
+            .filter(|dev| dev.inner.render_node != primary_node)
+        {
+            feedback = feedback.add_preference_tranche(
+                dev.inner.render_node.dev_id(),
+                TrancheFlags::Sampling,
+                dev.usable_formats(&dev.texture_formats),
+                6..=6,
             );
+        }
+
+        let Ok(default_feedback) = feedback.build() else {
+            return;
+        };
+        self.common
+            .dmabuf_state
+            .set_default_feedback(&global, &default_feedback);
+
+        if recovered {
+            // Per-surface caches also filter the blacklist, so drop them too.
+            for dev in self.backend.kms().drm_devices.values_mut() {
+                for surface in dev.inner.surfaces.values_mut() {
+                    surface.feedback.clear();
+                }
+            }
         }
     }
 
@@ -724,6 +754,7 @@ impl KmsState {
         _global: &DmabufGlobal,
         dmabuf: Dmabuf,
     ) -> Result<DrmNode> {
+        let client_id = client.as_ref().map(|client| client.id());
         let device_node = dmabuf
             .node()
             .unwrap_or_else(|| self.primary_node.read().unwrap().unwrap());
@@ -739,11 +770,19 @@ impl KmsState {
         // If device advertised to client doesn't support format/modifier, select
         // first device that does. This is needed for image-copy from
         // output/toplevel on a different node.
-        if dmabuf.node().is_none() && !device.texture_formats.contains(&dmabuf.format()) {
+        if dmabuf.node().is_none()
+            && !device
+                .usable_formats(&device.texture_formats)
+                .contains(&dmabuf.format())
+        {
             device = self
                 .drm_devices
                 .values_mut()
-                .find(|device| device.texture_formats.contains(&dmabuf.format()))
+                .find(|device| {
+                    device
+                        .usable_formats(&device.texture_formats)
+                        .contains(&dmabuf.format())
+                })
                 .context("Dmabuf cannot be imported on any gpu")?;
         }
 
@@ -757,20 +796,39 @@ impl KmsState {
             false
         };
 
-        let egl = device
-            .inner
-            .egl
-            .as_ref()
-            .context("EGL initialization Error")?;
-        egl.display
-            .create_image_from_dmabuf(&dmabuf)
-            .inspect(|image| unsafe {
-                smithay::backend::egl::ffi::egl::DestroyImageKHR(
-                    **egl.display.get_display_handle(),
-                    *image,
-                );
-            })
-            .context("Failed to create EGLImage from dmabuf")?;
+        let import_result = {
+            let egl = device
+                .inner
+                .egl
+                .as_ref()
+                .context("EGL initialization Error")?;
+            egl.display
+                .create_image_from_dmabuf(&dmabuf)
+                .map(|image| unsafe {
+                    smithay::backend::egl::ffi::egl::DestroyImageKHR(
+                        **egl.display.get_display_handle(),
+                        image,
+                    );
+                })
+        };
+
+        if let Err(err) = import_result {
+            // The driver advertised this format/modifier but cannot actually
+            // import it. Stop handing it to clients, otherwise they keep
+            // allocating unusable buffers and we retry the failed import on
+            // every commit, pegging the surface thread.
+            if device.record_failed_format(client_id, dmabuf.format(), Instant::now()) {
+                // Only this device's surfaces need new feedback: other devices
+                // with healthy imports should keep their cached scanout tranches.
+                for surface in device.inner.surfaces.values_mut() {
+                    surface.feedback.clear();
+                }
+                self.feedback_dirty = true;
+            }
+            return Err(err).context("Failed to create EGLImage from dmabuf");
+        }
+
+        device.record_success(client_id, &dmabuf.format());
 
         let node = device.inner.render_node;
         dmabuf.set_node(node);
@@ -1189,6 +1247,12 @@ impl KmsGuard<'_> {
         }
 
         if !test_only {
+            // Creating a CRTC surface clears its hardware LUT, so restore the
+            // saved tables after the backend lock has been released. Deferring
+            // this to an idle callback keeps config application non-blocking.
+            let _ = loop_handle.insert_idle(|state: &mut State| {
+                GammaControlState::reapply(state);
+            });
             self.refresh_used_devices()
                 .context("Failed to enable devices")?;
         }

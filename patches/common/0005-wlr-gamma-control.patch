@@ -1,8 +1,8 @@
 diff --git a/src/backend/kms/mod.rs b/src/backend/kms/mod.rs
-index 4dcffc75..80417d47 100644
+index df06dd67..1cf02230 100644
 --- a/src/backend/kms/mod.rs
 +++ b/src/backend/kms/mod.rs
-@@ -734,6 +734,106 @@ impl KmsState {
+@@ -801,6 +801,106 @@ impl KmsState {
              .copied()
      }
  
@@ -109,7 +109,7 @@ index 4dcffc75..80417d47 100644
      pub fn update_screen_filter(&mut self, screen_filter: &ScreenFilter) -> Result<()> {
          for device in self.drm_devices.values_mut() {
              for surface in device.inner.surfaces.values_mut() {
-@@ -1303,3 +1403,11 @@ impl KmsGuard<'_> {
+@@ -1373,3 +1473,11 @@ impl KmsGuard<'_> {
          Ok(())
      }
  }
@@ -122,10 +122,10 @@ index 4dcffc75..80417d47 100644
 +        .collect()
 +}
 diff --git a/src/shell/mod.rs b/src/shell/mod.rs
-index 86c3c201..87b7a889 100644
+index 4b6b519f..232b8633 100644
 --- a/src/shell/mod.rs
 +++ b/src/shell/mod.rs
-@@ -1648,6 +1648,7 @@ impl Common {
+@@ -1636,6 +1636,7 @@ impl Common {
              .cloned()
              .collect::<Vec<_>>();
          self.wlr_foreign_toplevel_state.refresh(&toplevels);
@@ -134,7 +134,7 @@ index 86c3c201..87b7a889 100644
          if let Some(mut a11y_keyboard_monitor) = self.dbus_state.a11y_keyboard_monitor() {
              a11y_keyboard_monitor.refresh();
 diff --git a/src/state.rs b/src/state.rs
-index bde1a5d1..313a13ad 100644
+index 15f98801..69a015c0 100644
 --- a/src/state.rs
 +++ b/src/state.rs
 @@ -18,6 +18,7 @@ use crate::{
@@ -145,7 +145,7 @@ index bde1a5d1..313a13ad 100644
              image_capture_source::CosmicImageCaptureSourceState,
              keyboard_layout::KeyboardLayoutState,
              output_configuration::OutputConfigurationState,
-@@ -285,6 +286,7 @@ pub struct Common {
+@@ -287,6 +288,7 @@ pub struct Common {
      pub output_state: OutputManagerState,
      pub output_configuration_state: OutputConfigurationState<State>,
      pub output_power_state: OutputPowerState,
@@ -153,7 +153,7 @@ index bde1a5d1..313a13ad 100644
      pub presentation_state: PresentationState,
      pub primary_selection_state: PrimarySelectionState,
      pub ext_data_control_state: ExtDataControlState,
-@@ -680,6 +682,7 @@ impl State {
+@@ -686,6 +688,7 @@ impl State {
          let output_configuration_state =
              OutputConfigurationState::new(dh, handle.clone(), client_not_sandboxed);
          let output_power_state = OutputPowerState::new::<Self, _>(dh, client_not_sandboxed);
@@ -161,7 +161,7 @@ index bde1a5d1..313a13ad 100644
          let overlap_notify_state =
              OverlapNotifyState::new::<Self, _>(dh, client_has_no_security_context);
          let presentation_state = PresentationState::new::<Self>(dh, clock.id() as u32);
-@@ -816,6 +819,7 @@ impl State {
+@@ -823,6 +826,7 @@ impl State {
                  output_state,
                  output_configuration_state,
                  output_power_state,
@@ -171,10 +171,10 @@ index bde1a5d1..313a13ad 100644
                  primary_selection_state,
 diff --git a/src/wayland/handlers/gamma_control.rs b/src/wayland/handlers/gamma_control.rs
 new file mode 100644
-index 00000000..1648cb59
+index 00000000..d3c14d08
 --- /dev/null
 +++ b/src/wayland/handlers/gamma_control.rs
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,41 @@
 +// SPDX-License-Identifier: GPL-3.0-only
 +
 +use smithay::output::Output;
@@ -182,6 +182,7 @@ index 00000000..1648cb59
 +
 +use crate::{
 +    state::{BackendData, State},
++    utils::prelude::OutputExt,
 +    wayland::protocols::gamma_control::{
 +        GammaControlHandler, GammaControlState, delegate_gamma_control,
 +    },
@@ -197,6 +198,10 @@ index 00000000..1648cb59
 +            BackendData::Kms(kms) => kms.gamma_table_size(output),
 +            _ => None,
 +        }
++    }
++
++    fn gamma_outputs_share_crtc(&self, a: &Output, b: &Output) -> bool {
++        a == b || a.mirroring().as_ref() == Some(b) || b.mirroring().as_ref() == Some(a)
 +    }
 +
 +    fn set_output_gamma(&mut self, output: &Output, table: Option<Vec<u16>>) {
@@ -269,10 +274,10 @@ index 333aacc6..44cde94a 100644
  
 diff --git a/src/wayland/protocols/gamma_control.rs b/src/wayland/protocols/gamma_control.rs
 new file mode 100644
-index 00000000..e3a947bd
+index 00000000..ff3b37c3
 --- /dev/null
 +++ b/src/wayland/protocols/gamma_control.rs
-@@ -0,0 +1,336 @@
+@@ -0,0 +1,380 @@
 +// SPDX-License-Identifier: GPL-3.0-only
 +
 +use smithay::{
@@ -309,6 +314,12 @@ index 00000000..e3a947bd
 +    /// a legacy gamma table. `None` means "no gamma control for this output"
 +    /// and makes the compositor send `failed`.
 +    fn gamma_table_size(&mut self, output: &Output) -> Option<u32>;
++
++    /// Whether two outputs share a physical CRTC (and therefore one hardware
++    /// ramp). Defaults to identity; the KMS backend widens this to mirrors.
++    fn gamma_outputs_share_crtc(&self, a: &Output, b: &Output) -> bool {
++        a == b
++    }
 +
 +    /// Apply `table` (red, green and blue ramps concatenated, `3 * size`
 +    /// entries) or restore the identity ramp with `None`.
@@ -371,16 +382,47 @@ index 00000000..e3a947bd
 +        self.tables.retain(|(output, _)| output.is_alive());
 +    }
 +
-+    /// Re-send every stored table to the hardware. Call after anything that can
-+    /// reset a CRTC's gamma LUT (DPMS on, output re-creation).
++    /// Re-send every stored table to the hardware. This is called after DPMS on
++    /// and after an output configuration, which may have re-created CRTC
++    /// surfaces and cleared their `GAMMA_LUT`.
 +    pub fn reapply<D: GammaControlHandler>(state: &mut D) {
 +        let tables = mem::take(&mut state.gamma_control_state().tables);
-+        for (output, table) in &tables {
-+            if let Some(output) = output.upgrade() {
++        let mut kept = Vec::with_capacity(tables.len());
++        for (weak, table) in tables {
++            let Some(output) = weak.upgrade() else {
++                continue;
++            };
++            if table.len() % 3 == 0
++                && state
++                    .gamma_table_size(&output)
++                    .is_some_and(|size| table.len() / 3 == size as usize)
++            {
 +                state.set_output_gamma(&output, Some(table.clone()));
++                kept.push((weak, table));
++                continue;
++            }
++
++            // A modeset changed the CRTC ramp size. Drop the stale table and
++            // tell its owner, which can then re-upload one of the right size.
++            warn!(output = %output.name(), "Dropping stale gamma table after ramp size change");
++            let controls: Vec<_> = state
++                .gamma_control_state()
++                .controls
++                .iter()
++                .cloned()
++                .collect();
++            for control in controls {
++                if control
++                    .data::<GammaControlData>()
++                    .and_then(|data| data.output.upgrade())
++                    .is_some_and(|other| state.gamma_outputs_share_crtc(&other, &output))
++                {
++                    control.failed();
++                    state.gamma_control_state().controls.remove(&control);
++                }
 +            }
 +        }
-+        state.gamma_control_state().tables = tables;
++        state.gamma_control_state().tables = kept;
 +    }
 +}
 +
@@ -466,14 +508,21 @@ index 00000000..e3a947bd
 +                    return;
 +                };
 +
-+                // Exclusive per output: a second control would fight over the
-+                // same CRTC ramp.
-+                let taken = state.gamma_control_state().controls.iter().any(|other| {
-+                    other
-+                        .data::<GammaControlData>()
-+                        .and_then(|data| data.output.upgrade())
-+                        .is_some_and(|other| other == output)
-+                });
++                // Exclusive per physical CRTC: mirrored outputs share one ramp,
++                // so a control for either one must block the other.
++                let other_outputs: Vec<_> = state
++                    .gamma_control_state()
++                    .controls
++                    .iter()
++                    .filter_map(|other| {
++                        other
++                            .data::<GammaControlData>()
++                            .and_then(|data| data.output.upgrade())
++                    })
++                    .collect();
++                let taken = other_outputs
++                    .iter()
++                    .any(|other| state.gamma_outputs_share_crtc(other, &output));
 +
 +                match state.gamma_table_size(&output) {
 +                    Some(size) if !taken => {
@@ -580,10 +629,10 @@ index 00000000..e3a947bd
 +    let len = (size as usize)
 +        .checked_mul(3 * 2)
 +        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "gamma table size overflow"))?;
-+    if metadata.len() < len as u64 {
++    if metadata.len() != len as u64 {
 +        return Err(io::Error::new(
-+            io::ErrorKind::UnexpectedEof,
-+            "gamma table file is shorter than the expected table",
++            io::ErrorKind::InvalidInput,
++            "gamma table file length does not match the expected table",
 +        ));
 +    }
 +

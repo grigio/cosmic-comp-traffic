@@ -7,26 +7,19 @@
     parts.url = "github:hercules-ci/flake-parts";
     parts.inputs.nixpkgs-lib.follows = "nixpkgs";
 
-    rust.url = "github:oxalica/rust-overlay";
-    rust.inputs.nixpkgs.follows = "nixpkgs";
-
     nix-filter.url = "github:numtide/nix-filter";
-    nix-filter.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs = inputs @ {
-    self,
     nixpkgs,
     parts,
-    rust,
     nix-filter,
     ...
   }: let
-    # Allow overriding cargoVendorHash from file (for CI)
-    cargoVendorHash =
-      if builtins.pathExists ./cargoVendorHash.nix
-      then (import ./cargoVendorHash.nix)
-      else null;
+    # nixpkgs.toml holds the package metadata; the vendor hash has its own
+    # file so CI can regenerate just that value without touching the flake.
+    config = builtins.fromTOML (builtins.readFile ./nixpkgs.toml);
+    cargoVendorHash = import ./cargoVendorHash.nix;
   in
     parts.lib.mkFlake {inherit inputs;} {
       systems = [
@@ -40,7 +33,9 @@
         system,
         ...
       }: let
-        pkgs = nixpkgs.legacyPackages.${system}.extend rust.overlays.default;
+        # No rust-overlay: nixpkgs' rustc is used for the build and
+        # rust-toolchain.toml only pins the toolchain for local cargo builds.
+        pkgs = nixpkgs.legacyPackages.${system};
 
         # Use libdisplay-info_0_3 like nixpkgs cosmic-comp package
         libdisplay-info = pkgs.libdisplay-info_0_3;
@@ -62,8 +57,8 @@
 
         # Use rustPlatform.buildRustPackage like nixpkgs cosmic-comp package
         cosmic-comp-traffic = pkgs.rustPlatform.buildRustPackage {
-          pname = "cosmic-comp-traffic";
-          version = self.rev or "dirty";
+          pname = config.packages.default;
+          version = config.package.version;
 
           src = nix-filter.lib.filter {
             root = ./.;
@@ -84,7 +79,7 @@
             ];
           };
 
-          cargoHash = "sha256-m5CySOlC3lhTSWLGciJdwGnZKd5xL/vyO5KyPHBfhVI=";
+          cargoHash = cargoVendorHash;
 
           nativeBuildInputs = with pkgs; [
             pkg-config

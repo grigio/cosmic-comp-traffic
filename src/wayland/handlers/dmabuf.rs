@@ -29,6 +29,13 @@ impl DmabufHandler for State {
         match self.backend.dmabuf_imported(client.clone(), global, dmabuf) {
             Err(err) => {
                 tracing::debug!(?err, "dmabuf import failed");
+                // The KMS backend may have blacklisted a format/modifier that
+                // EGL cannot actually import. Rebuild the default feedback so
+                // clients stop allocating unusable buffers (and we stop
+                // retrying the failed import every frame).
+                if matches!(self.backend, BackendData::Kms(_)) {
+                    self.update_default_feedback();
+                }
                 import_notifier.failed()
             }
             Ok(_) => {

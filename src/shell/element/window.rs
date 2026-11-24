@@ -17,7 +17,16 @@ use crate::{
     },
 };
 use calloop::LoopHandle;
-use cosmic::iced::{Color, Task};
+use cosmic::{
+    iced::{
+        Alignment, Color, Length, Task,
+        core::text::{Ellipsize, EllipsizeHeightLimit, Wrapping},
+        mouse,
+        widget::canvas,
+    },
+    theme,
+    widget::{self, text},
+};
 use cosmic_comp_config::AppearanceConfig;
 use smithay::{
     backend::{
@@ -63,20 +72,13 @@ use smithay::{
     },
     wayland::{pointer_constraints::with_pointer_constraint, seat::WaylandFocus},
 };
-use std::{
-    borrow::Cow,
-    fmt,
-    hash::Hash,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicU8, Ordering},
-    },
-};
+use std::{borrow::Cow, fmt, hash::Hash, mem, sync::Arc};
 use wayland_backend::server::ObjectId;
 
 use super::CosmicSurface;
 
-pub const SSD_HEIGHT: i32 = 36;
+// Must match the height of the decoration built in DefaultDecorations::view.
+pub const SSD_HEIGHT: i32 = 28;
 pub const RESIZE_BORDER: i32 = 10;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -93,16 +95,15 @@ impl fmt::Debug for CosmicWindow {
 #[derive(Debug)]
 pub struct CosmicWindowInternal {
     pub(super) window: CosmicSurface,
-    activated: AtomicBool,
+    activated: bool,
     /// TODO: This needs to be per seat
-    pointer_entered: AtomicU8,
-    last_title: Mutex<String>,
-    tiled: AtomicBool,
-    theme: Mutex<cosmic::Theme>,
-    appearance_conf: Mutex<AppearanceConfig>,
+    pointer_entered: Option<Focus>,
+    last_title: String,
+    tiled: bool,
+    theme: cosmic::Theme,
+    appearance_conf: AppearanceConfig,
 }
 
-#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Focus {
     Header = 1,
@@ -160,25 +161,15 @@ impl Focus {
             Focus::Header => CursorIcon::Default,
         }
     }
-
-    /// # Safety
-    /// `value` must be in the range of `Focus`
-    pub unsafe fn from_u8(value: u8) -> Option<Focus> {
-        match value {
-            0 => None,
-            focus => unsafe { Some(std::mem::transmute::<u8, Focus>(focus)) },
-        }
-    }
 }
 
 impl CosmicWindowInternal {
-    pub fn swap_focus(&self, focus: Option<Focus>) -> Option<Focus> {
-        let value = focus.map_or(0, |x| x as u8);
-        unsafe { Focus::from_u8(self.pointer_entered.swap(value, Ordering::SeqCst)) }
+    pub fn swap_focus(&mut self, focus: Option<Focus>) -> Option<Focus> {
+        mem::replace(&mut self.pointer_entered, focus)
     }
 
     pub fn current_focus(&self) -> Option<Focus> {
-        unsafe { Focus::from_u8(self.pointer_entered.load(Ordering::SeqCst)) }
+        self.pointer_entered
     }
 
     /// returns if the window has any current or pending server-side decorations
@@ -188,7 +179,7 @@ impl CosmicWindowInternal {
 
     /// returns if the window is currently tiled
     pub fn is_tiled(&self) -> bool {
-        self.tiled.load(Ordering::Acquire)
+        self.tiled
     }
 
     fn has_tiled_state(&self) -> bool {
@@ -215,12 +206,12 @@ impl CosmicWindow {
         CosmicWindow(IcedElement::new(
             CosmicWindowInternal {
                 window,
-                activated: AtomicBool::new(false),
-                pointer_entered: AtomicU8::new(0),
-                last_title: Mutex::new(last_title),
-                tiled: AtomicBool::new(false),
-                theme: Mutex::new(theme.clone()),
-                appearance_conf: Mutex::new(appearance),
+                activated: false,
+                pointer_entered: None,
+                last_title,
+                tiled: false,
+                theme: theme.clone(),
+                appearance_conf: appearance,
             },
             (width, SSD_HEIGHT),
             handle,
@@ -377,9 +368,8 @@ impl CosmicWindow {
         };
 
         self.0.with_program(|p| {
-            let theme = p.theme.lock().unwrap();
-            let frosted = if theme.cosmic().frosted_windows {
-                (theme.cosmic().frosted as u8 + 1) as usize
+            let frosted = if p.theme.cosmic().frosted_windows {
+                (p.theme.cosmic().frosted as u8 + 1) as usize
             } else {
                 0
             };
@@ -414,25 +404,24 @@ impl CosmicWindow {
             let has_ssd = p.has_ssd(false);
             let is_tiled = p.is_tiled();
             let activated = p.window.is_activated(false);
-            let appearance = p.appearance_conf.lock().unwrap();
-            let theme = p.theme.lock().unwrap();
 
             if p.window.is_maximized(false) {
                 return None;
             }
 
-            let clip = (!is_tiled && appearance.clip_floating_windows)
-                || (is_tiled && appearance.clip_tiled_windows);
+            let clip = (!is_tiled && p.appearance_conf.clip_floating_windows)
+                || (is_tiled && p.appearance_conf.clip_tiled_windows);
             let should_draw_shadow = if is_tiled {
-                appearance.shadow_tiled_windows
+                p.appearance_conf.shadow_tiled_windows
             } else {
-                appearance.clip_floating_windows || has_ssd
+                p.appearance_conf.clip_floating_windows || has_ssd
             };
 
             if !should_draw_shadow {
                 return None;
             }
-            let mut radii = theme
+            let mut radii = p
+                .theme
                 .cosmic()
                 .radius_s()
                 .map(|x| if x < 4.0 { x } else { x + 4.0 })
@@ -469,7 +458,7 @@ impl CosmicWindow {
                     radii,
                     if activated { alpha } else { alpha * 0.75 },
                     output_scale.x,
-                    theme.cosmic().is_dark,
+                    p.theme.cosmic().is_dark,
                 ))
                 .into(),
             )
@@ -497,13 +486,11 @@ impl CosmicWindow {
                 p.is_tiled(),
                 p.window.is_maximized(false),
                 p.theme
-                    .lock()
-                    .unwrap()
                     .cosmic()
                     .radius_s()
                     .map(|x| if x < 4.0 { x } else { x + 4.0 })
                     .map(|x| x.round() as u8),
-                *p.appearance_conf.lock().unwrap(),
+                p.appearance_conf,
             )
         });
         let clip = ((!is_tiled && appearance.clip_floating_windows)
@@ -526,10 +513,14 @@ impl CosmicWindow {
             location
         };
 
+        // The focus ring is gated on `shell.active_hint && theme.cosmic().active_hint`
+        // in the renderer; this helper has no `shell` access (24 call sites), so
+        // plumbing that flag here would be invasive. Keep drawing the bg_divider
+        // border as upstream does rather than suppressing it on activation.
         let (mut geo, bg_divider) = self.0.with_program(|p| {
             (
                 SpaceElement::geometry(&p.window).to_f64(),
-                p.theme.lock().unwrap().cosmic().bg_divider(),
+                p.theme.cosmic().bg_divider(),
             )
         });
         geo.loc += location.to_f64().to_logical(scale);
@@ -564,9 +555,8 @@ impl CosmicWindow {
                 radii[0] = 0;
                 radii[1] = 0;
             }
-            let theme = p.theme.lock().unwrap();
-            let frosted = if theme.cosmic().frosted_windows {
-                (theme.cosmic().frosted as u8 + 1) as usize
+            let frosted = if p.theme.cosmic().frosted_windows {
+                (p.theme.cosmic().frosted as u8 + 1) as usize
             } else {
                 0
             };
@@ -607,19 +597,18 @@ impl CosmicWindow {
     pub(crate) fn set_theme(&self, mut theme: cosmic::Theme) {
         theme.transparent = theme.cosmic().frosted_windows;
         self.0.with_program(|p| {
-            *p.theme.lock().unwrap() = theme.clone();
+            p.theme = theme.clone();
         });
         self.0.set_theme(theme);
     }
 
     pub fn update_appearance_conf(&self, appearance: &AppearanceConfig) {
         self.0.with_program(|p| {
-            let mut conf = p.appearance_conf.lock().unwrap();
-            if &*conf != appearance {
-                *conf = *appearance;
+            if p.appearance_conf != *appearance {
+                p.appearance_conf = *appearance;
                 if appearance.clip_floating_windows {
                     p.window.set_tiled(true);
-                } else if !p.tiled.load(Ordering::Acquire) {
+                } else if !p.tiled {
                     p.window.set_tiled(false);
                 }
                 p.window.send_configure();
@@ -656,8 +645,8 @@ impl CosmicWindow {
 
     pub fn set_tiled(&self, tiled: bool) {
         self.0.with_program(|p| {
-            p.tiled.store(tiled, Ordering::Release);
-            if !p.appearance_conf.lock().unwrap().clip_floating_windows {
+            p.tiled = tiled;
+            if !p.appearance_conf.clip_floating_windows {
                 p.window.set_tiled(tiled);
             }
         });
@@ -667,18 +656,15 @@ impl CosmicWindow {
         self.0.with_program(|p| {
             let has_ssd = p.has_ssd(false);
             let is_tiled = p.is_tiled();
-            let appearance = p.appearance_conf.lock().unwrap();
 
-            let clip = ((!is_tiled && appearance.clip_floating_windows)
-                || (is_tiled && appearance.clip_tiled_windows))
+            let clip = ((!is_tiled && p.appearance_conf.clip_floating_windows)
+                || (is_tiled && p.appearance_conf.clip_tiled_windows))
                 && !p.window.is_maximized(false);
-            let round =
-                (!is_tiled || appearance.clip_tiled_windows) && !p.window.is_maximized(false);
+            let round = (!is_tiled || p.appearance_conf.clip_tiled_windows)
+                && !p.window.is_maximized(false);
             let radii = if round {
                 {
                     p.theme
-                        .lock()
-                        .unwrap()
                         .cosmic()
                         .radius_s()
                         .map(|x| if x < 4.0 { x } else { x + 4.0 })
@@ -872,29 +858,264 @@ impl Program for CosmicWindowInternal {
 #[derive(Debug)]
 pub struct DefaultDecorations;
 
+// macOS-style traffic lights, matching ~/Code/labwc-macos-dark-theme:
+// close=red, minimize=green, maximize=yellow, right-aligned, glyph only on
+// hover. libcosmic's header_bar() can only tint all three buttons with one
+// colour, so the controls are built here instead.
+const LIGHT_CLOSE: Color = Color::from_rgb(1.0, 0.3725, 0.3412); // #FF5F57
+const LIGHT_MINIMIZE: Color = Color::from_rgb(0.1569, 0.7843, 0.2510); // #28C840
+const LIGHT_MAXIMIZE: Color = Color::from_rgb(0.9961, 0.7373, 0.1804); // #FEBC2E
+const LIGHT_INACTIVE: Color = Color::from_rgb(0.3882, 0.3882, 0.4); // #636366
+
+/// Diameter of a traffic light, matching macOS (and the 10px circles in the
+/// labwc theme this copies).
+const LIGHT_SIZE: f32 = 12.0;
+/// The mouse area extends 4px past each 12px circle, giving a 20x20 click
+/// target while keeping the visible 8px gap and macOS' 20px centres. The hit
+/// boxes touch but do not overlap, so each light owns its own clicks.
+const LIGHT_HIT_PADDING: u16 = 4;
+const LIGHT_SPACING: u16 = 0;
+/// Titlebar content height. Kept in sync with SSD_HEIGHT, which cosmic-comp
+/// uses for hit-testing and window geometry.
+const HEADER_HEIGHT: f32 = SSD_HEIGHT as f32;
+
+type IcedPoint = cosmic::iced::Point;
+type IcedRectangle = cosmic::iced::Rectangle;
+
+fn light_color(base: Color, factor: f32) -> Color {
+    Color {
+        r: (base.r * factor).min(1.0),
+        g: (base.g * factor).min(1.0),
+        b: (base.b * factor).min(1.0),
+        a: base.a,
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LightGlyph {
+    Minimize,
+    Maximize,
+    Close,
+}
+
+/// One macOS-style traffic light, drawn on a canvas so that the glyph can be
+/// shown only while the pointer is over it (iced styles cannot switch widget
+/// content, and the theme's icon tint applies to all header buttons at once).
+struct TrafficLight {
+    color: Color,
+    glyph: LightGlyph,
+    focused: bool,
+}
+
+impl canvas::Program<Message, theme::Theme, cosmic::Renderer> for TrafficLight {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &cosmic::Renderer,
+        _theme: &theme::Theme,
+        bounds: IcedRectangle,
+        cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let hovered = cursor.is_over(bounds);
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let center = IcedPoint::new(bounds.width / 2.0, bounds.height / 2.0);
+        let radius = bounds.width.min(bounds.height) / 2.0;
+
+        // Unfocused windows dim to grey, like macOS. Hovering lightens the
+        // circle slightly instead of drawing a halo.
+        let base = if self.focused {
+            self.color
+        } else {
+            LIGHT_INACTIVE
+        };
+        let fill = if hovered {
+            light_color(base, if self.focused { 1.12 } else { 1.25 })
+        } else {
+            base
+        };
+        frame.fill(&canvas::Path::circle(center, radius), fill);
+
+        if hovered {
+            let glyph = Color::from_rgba(0.0, 0.0, 0.0, if self.focused { 0.55 } else { 0.35 });
+            let stroke = canvas::Stroke::default()
+                .with_color(glyph)
+                .with_width(1.2)
+                .with_line_cap(canvas::LineCap::Round);
+
+            match self.glyph {
+                LightGlyph::Minimize => {
+                    let arms = radius * 0.45;
+                    frame.stroke(
+                        &canvas::Path::line(
+                            IcedPoint::new(center.x - arms, center.y),
+                            IcedPoint::new(center.x + arms, center.y),
+                        ),
+                        stroke,
+                    );
+                }
+                LightGlyph::Close => {
+                    let arms = radius * 0.35;
+                    frame.stroke(
+                        &canvas::Path::line(
+                            IcedPoint::new(center.x - arms, center.y - arms),
+                            IcedPoint::new(center.x + arms, center.y + arms),
+                        ),
+                        stroke,
+                    );
+                    frame.stroke(
+                        &canvas::Path::line(
+                            IcedPoint::new(center.x - arms, center.y + arms),
+                            IcedPoint::new(center.x + arms, center.y - arms),
+                        ),
+                        stroke,
+                    );
+                }
+                LightGlyph::Maximize => {
+                    // macOS uses two opposing arrow heads for "zoom".
+                    let out = radius * 0.55;
+                    let arm = radius * 0.32;
+                    let heads = [
+                        [
+                            IcedPoint::new(center.x + out - arm, center.y - out),
+                            IcedPoint::new(center.x + out, center.y - out),
+                            IcedPoint::new(center.x + out, center.y - out + arm),
+                        ],
+                        [
+                            IcedPoint::new(center.x - out + arm, center.y + out),
+                            IcedPoint::new(center.x - out, center.y + out),
+                            IcedPoint::new(center.x - out, center.y + out - arm),
+                        ],
+                    ];
+                    for head in heads {
+                        frame.fill(
+                            &canvas::Path::new(|builder| {
+                                builder.move_to(head[0]);
+                                builder.line_to(head[1]);
+                                builder.line_to(head[2]);
+                                builder.close();
+                            }),
+                            glyph,
+                        );
+                    }
+                }
+            }
+        }
+
+        vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(
+        &self,
+        _state: &(),
+        bounds: IcedRectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        if cursor.is_over(bounds) {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::None
+        }
+    }
+}
+
+fn traffic_light(
+    glyph: LightGlyph,
+    color: Color,
+    focused: bool,
+    on_press: Option<Message>,
+) -> cosmic::Element<'static, Message> {
+    let light = widget::canvas(TrafficLight {
+        color,
+        glyph,
+        focused,
+    })
+    .width(Length::Fixed(LIGHT_SIZE))
+    .height(Length::Fixed(LIGHT_SIZE));
+
+    // Keep the drawn circle at LIGHT_SIZE but give it a friendlier hit target.
+    let light = widget::container(light).padding(LIGHT_HIT_PADDING);
+    let mut light = widget::mouse_area(light);
+    if let Some(message) = on_press {
+        light = light.on_press(message);
+    }
+
+    light.into()
+}
+
 impl Decorations<CosmicWindowInternal, Message> for DefaultDecorations {
     fn view(&self, win: &CosmicWindowInternal) -> cosmic::Element<'_, Message> {
         let sharp_corners = win.window.is_maximized(false)
-            || (win.is_tiled() && !win.appearance_conf.lock().unwrap().clip_tiled_windows);
+            || (win.is_tiled() && !win.appearance_conf.clip_tiled_windows);
+        // Use the compositor's own activation flag. `window.is_activated(false)`
+        // reads the client-acknowledged xdg_toplevel state, which only updates
+        // after the client commits, so a freshly (de)focused window kept the
+        // lights of its previous state until the next event rebuilt the view.
+        let focused = win.activated;
+        let title = win.last_title.clone();
 
-        let mut header = cosmic::widget::header_bar()
-            .title(win.last_title.lock().unwrap().clone())
-            .on_drag(Message::DragStart)
-            .on_close(Message::Close)
-            .focused(win.window.is_activated(false))
-            .on_double_click(Message::Maximize)
-            .on_right_click(Message::Menu)
-            .is_ssd(true)
-            .sharp_corners(sharp_corners);
+        let mut lights: Vec<cosmic::Element<'_, Message>> = Vec::with_capacity(3);
 
         if cosmic::config::show_minimize() {
-            header = header.on_minimize(Message::Minimize)
+            lights.push(traffic_light(
+                LightGlyph::Minimize,
+                LIGHT_MINIMIZE,
+                focused,
+                Some(Message::Minimize),
+            ));
         }
         if cosmic::config::show_maximize() {
-            header = header.on_maximize(Message::Maximize)
+            lights.push(traffic_light(
+                LightGlyph::Maximize,
+                LIGHT_MAXIMIZE,
+                focused,
+                Some(Message::Maximize),
+            ));
         }
+        lights.push(traffic_light(
+            LightGlyph::Close,
+            LIGHT_CLOSE,
+            focused,
+            Some(Message::Close),
+        ));
 
-        header.into()
+        let header = widget::container(
+            widget::row::with_capacity(2)
+                .push(
+                    widget::container(
+                        text::heading(title)
+                            .wrapping(Wrapping::None)
+                            .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
+                    )
+                    .width(Length::Fill)
+                    .align_x(Alignment::Center)
+                    .align_y(Alignment::Center),
+                )
+                .push(
+                    widget::row::with_children(lights)
+                        .spacing(LIGHT_SPACING)
+                        .align_y(Alignment::Center),
+                )
+                .align_y(Alignment::Center)
+                .width(Length::Fill),
+        )
+        .class(theme::Container::HeaderBar {
+            focused,
+            sharp_corners,
+            transparent: false,
+        })
+        .width(Length::Fill)
+        .height(Length::Fixed(HEADER_HEIGHT))
+        .padding([2, 8, 2, 8])
+        .align_x(Alignment::Start)
+        .align_y(Alignment::Center);
+
+        widget::mouse_area(header)
+            .on_drag(Message::DragStart)
+            .on_double_press(Message::Maximize)
+            .on_right_press(Message::Menu)
+            .into()
     }
 }
 
@@ -926,16 +1147,18 @@ impl SpaceElement for CosmicWindow {
             .is_some()
     }
     fn set_activate(&self, activated: bool) {
-        if self
-            .0
-            .with_program(|p| p.activated.load(Ordering::SeqCst) != activated)
-        {
-            SpaceElement::set_activate(&self.0, activated);
-            self.0.force_redraw();
+        if self.0.with_program(|p| p.activated != activated) {
+            // Store the flag before rebuilding the view: `view()` reads it to
+            // colour the traffic lights, so it has to be current by then.
             self.0.with_program(|p| {
-                p.activated.store(activated, Ordering::SeqCst);
+                p.activated = activated;
                 SpaceElement::set_activate(&p.window, activated);
             });
+            // `set_activate` queues a Focused/Unfocused event and calls update(),
+            // which rebuilds the iced view with the new flag above. That is the
+            // only update needed to recolour the lights: an extra force_update()
+            // would be redundant.
+            SpaceElement::set_activate(&self.0, activated);
         }
     }
     #[profiling::function]
@@ -971,9 +1194,8 @@ impl SpaceElement for CosmicWindow {
             }
 
             let title = p.window.title();
-            let mut last_title = p.last_title.lock().unwrap();
-            if *last_title != title {
-                *last_title = title;
+            if p.last_title != title {
+                p.last_title = title;
                 true
             } else {
                 false

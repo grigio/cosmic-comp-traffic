@@ -59,7 +59,7 @@ use std::{
     os::fd::OwnedFd,
     path::Path,
     sync::{Arc, RwLock, atomic::AtomicBool, mpsc::Receiver},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use super::{drm_helpers, surface::Surface};
@@ -100,7 +100,107 @@ pub struct Device {
     pub drm: GbmDrmOutputManager,
 
     pub texture_formats: FormatSet,
+    /// Formats advertised by EGL that failed to import in practice.
+    ///
+    /// Some drivers (notably Xe) report tiled/compressed modifiers in
+    /// `dmabuf_texture_formats()` that `eglCreateImageKHR` later rejects. If we
+    /// keep advertising them, clients keep producing buffers we cannot use and
+    /// the surface thread burns CPU retrying the import on every commit.
+    pub failed_texture_formats: FormatSet,
+    /// Failed import probes per format and client. A format is only blacklisted
+    /// after several failures from *two different clients*, so neither a
+    /// transient EGL error nor one buggy client can disable a good modifier for
+    /// everyone.
+    pending_format_failures: HashMap<Format, HashMap<Option<ClientId>, usize>>,
+    /// When a format was blacklisted. It is retried after [`BLACKLIST_TTL`] so a
+    /// GPU reset that caused a burst of failures cannot poison a format forever.
+    failed_since: HashMap<Format, Instant>,
     event_token: Option<RegistrationToken>,
+}
+
+impl Device {
+    /// Total failed probes before a format is disabled.
+    const BLACKLIST_FAILURES: usize = 3;
+    /// A single client must never be able to disable a format for everyone.
+    const BLACKLIST_CLIENTS: usize = 2;
+    /// How long a disabled format stays out of the feedback before being retried.
+    const BLACKLIST_TTL: Duration = Duration::from_secs(60);
+
+    /// Build a format set with formats known to be unusable removed.
+    pub fn usable_formats(&self, formats: &FormatSet) -> FormatSet {
+        formats
+            .iter()
+            .filter(|format| !self.failed_texture_formats.contains(format))
+            .copied()
+            .collect()
+    }
+
+    /// Record a failed import probe. Returns `true` once the format has been
+    /// newly blacklisted, so the caller can refresh the advertised feedback.
+    pub fn record_failed_format(
+        &mut self,
+        client: Option<ClientId>,
+        format: Format,
+        now: Instant,
+    ) -> bool {
+        if self.failed_texture_formats.contains(&format) {
+            return false;
+        }
+        let clients = self.pending_format_failures.entry(format).or_default();
+        *clients.entry(client).or_insert(0) += 1;
+        let failures: usize = clients.values().sum();
+        if failures < Self::BLACKLIST_FAILURES || clients.len() < Self::BLACKLIST_CLIENTS {
+            return false;
+        }
+
+        self.pending_format_failures.remove(&format);
+        self.failed_texture_formats = self
+            .failed_texture_formats
+            .iter()
+            .copied()
+            .chain(std::iter::once(format))
+            .collect();
+        self.failed_since.insert(format, now);
+        warn!(?format, "Disabling dmabuf format that cannot be imported");
+        true
+    }
+
+    /// A successful import clears only that client's strikes for the format.
+    pub fn record_success(&mut self, client: Option<ClientId>, format: &Format) {
+        let mut empty = false;
+        if let Some(clients) = self.pending_format_failures.get_mut(format) {
+            clients.remove(&client);
+            empty = clients.is_empty();
+        }
+        if empty {
+            self.pending_format_failures.remove(format);
+        }
+    }
+
+    /// Re-advertise formats whose blacklist entry has expired. Returns `true`
+    /// if anything changed, so the caller can regenerate feedback.
+    pub fn maybe_recover_formats(&mut self, now: Instant) -> bool {
+        let expired: Vec<_> = self
+            .failed_since
+            .iter()
+            .filter(|(_, since)| now.duration_since(**since) >= Self::BLACKLIST_TTL)
+            .map(|(format, _)| *format)
+            .collect();
+        let changed = !expired.is_empty();
+        for format in &expired {
+            self.failed_since.remove(format);
+        }
+        self.failed_texture_formats = self
+            .failed_texture_formats
+            .iter()
+            .copied()
+            .filter(|format| !expired.contains(format))
+            .collect();
+        for format in expired {
+            info!(?format, "Re-enabling dmabuf format after blacklist expiry");
+        }
+        changed
+    }
 }
 
 #[derive(Debug)]
@@ -806,6 +906,9 @@ impl Device {
             },
 
             texture_formats,
+            failed_texture_formats: FormatSet::default(),
+            pending_format_failures: HashMap::new(),
+            failed_since: HashMap::new(),
             event_token: Some(token),
         })
     }

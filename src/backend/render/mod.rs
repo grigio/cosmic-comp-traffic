@@ -188,6 +188,7 @@ impl From<Id> for Key {
 #[derive(PartialEq)]
 struct IndicatorSettings {
     thickness: u8,
+    pad: u8,
     outer_radius: [u8; 4],
     alpha: f32,
     color: [f32; 3],
@@ -216,16 +217,22 @@ impl IndicatorShader {
         scale: f64,
         active_window_hint: [f32; 3],
     ) -> PixelShaderElement {
-        let t = thickness as i32;
+        // The ring is feathered (FEATHER in rounded_outline.frag), so the element
+        // needs extra room outside the ring's outer edge or the glow gets clipped.
+        // Keep the pad at least FEATHER and at least one physical pixel; at very
+        // low output scales 0.5/scale can exceed the old fixed pad of 2.
+        let pad = (0.5 / scale).ceil().max(2.0) as u8;
+        let t = thickness as i32 + pad as i32;
         element_geo.loc -= (t, t).into();
         element_geo.size += (t * 2, t * 2).into();
-        let outer_radius = inner_radius.map(|r| r + thickness);
+        let outer_radius = inner_radius.map(|r| r + thickness + pad);
 
-        IndicatorShader::element(
+        IndicatorShader::element_with_pad(
             renderer,
             key,
             element_geo,
             thickness,
+            pad,
             outer_radius,
             alpha,
             scale,
@@ -243,8 +250,34 @@ impl IndicatorShader {
         scale: f64,
         color: [f32; 3],
     ) -> PixelShaderElement {
+        IndicatorShader::element_with_pad(
+            renderer,
+            key,
+            geo,
+            thickness,
+            0,
+            outer_radius,
+            alpha,
+            scale,
+            color,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn element_with_pad<R: AsGlowRenderer>(
+        renderer: &R,
+        key: impl Into<Key>,
+        geo: Rectangle<i32, Local>,
+        thickness: u8,
+        pad: u8,
+        outer_radius: [u8; 4],
+        alpha: f32,
+        scale: f64,
+        color: [f32; 3],
+    ) -> PixelShaderElement {
         let settings = IndicatorSettings {
             thickness,
+            pad,
             outer_radius,
             alpha,
             scale,
@@ -283,6 +316,11 @@ impl IndicatorShader {
                         [color[0] * alpha, color[1] * alpha, color[2] * alpha],
                     ),
                     Uniform::new("thickness", thickness),
+                    // `pad` is how far the element extends past the ring's outer
+                    // edge. The shader needs it to shrink the ring back to the
+                    // window bounds; without it the focus ring floats outside
+                    // the window and the glow is clipped at the element edge.
+                    Uniform::new("pad", pad as f32),
                     Uniform::new(
                         "radius",
                         [
@@ -405,6 +443,10 @@ pub fn init_shaders(renderer: &mut GlesRenderer) -> Result<(), GlesError> {
         &[
             UniformName::new("color", UniformType::_3f),
             UniformName::new("thickness", UniformType::_1f),
+            // Must be listed here as well as in the shader source: the glow is
+            // drawn through this program, and a uniform that is set but not
+            // declared at compile time fails every frame with UnknownUniform.
+            UniformName::new("pad", UniformType::_1f),
             UniformName::new("scale", UniformType::_1f),
             UniformName::new("radius", UniformType::_4f),
         ],

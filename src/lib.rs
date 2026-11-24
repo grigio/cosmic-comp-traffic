@@ -117,7 +117,9 @@ pub fn run(hooks: crate::hooks::Hooks) -> Result<(), Box<dyn Error>> {
     let git_hash = option_env!("GIT_HASH").unwrap_or("unknown");
 
     let mut kiosk_command = None;
-    let mut with_xwayland = true;
+    let mut with_xwayland =
+        !crate::utils::env::bool_var("COSMIC_DISABLE_XWAYLAND").unwrap_or(false);
+
     // Parse the arguments
     while let Some(arg) = raw_args.next_os(&mut cursor) {
         match arg.to_str() {
@@ -367,6 +369,17 @@ fn refresh(state: &mut State) {
     }
 
     state.common.refresh();
+    // Blacklisted dmabuf formats expire on a timer; call this every refresh so
+    // the feedback is regenerated without waiting for another failed import.
+    if matches!(state.backend, BackendData::Kms(_)) {
+        state.update_default_feedback();
+    }
+    {
+        let shell = state.common.shell.read();
+        for seat in shell.seats.iter() {
+            wayland::handlers::seat::update_cursor_surface_outputs(seat, shell.outputs());
+        }
+    }
     state::Common::refresh_focus(state);
     OverlapNotifyState::refresh(state);
     state.common.update_x11_stacking_order();

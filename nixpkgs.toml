@@ -1,7 +1,6 @@
-# Nix configuration for this flake.
-#
-# This file documents the flake inputs and can be used by tools like
-# nixpkgs-update or flake-parts to understand the flake structure.
+# Metadata read by flake.nix with builtins.fromTOML at evaluation time.
+# flake.lock still pins the actual revisions of nixpkgs, flake-parts and
+# nix-filter; the url below is documentation for tools that look here.
 
 [nixpkgs]
 url = "github:NixOS/nixpkgs/nixos-unstable"
@@ -15,6 +14,11 @@ default = "x86_64-linux"
 # The canonical package name exposed by the flake
 default = "cosmic-comp-traffic"
 
+[package]
+# Upstream epoch this fork currently targets. Used as the Nix package version
+# instead of a git hash or a literal "dirty".
+version = "1.11.0"
+
 [devShells]
 default = [
   "rustc",
@@ -26,23 +30,7 @@ default = [
 flakes = true
 
 [flake-parts]
-# Flake-parts configuration
-# See https://github.com/hercules-ci/flake-parts
-enabled = true
-
-[crane]
-# Crane configuration
-# See https://github.com/ipetkov/crane
-enabled = true
-# Use the same crane revision as cosmic-comp for compatibility
-rev = "63396562b8e08efda3b3c66e32661b8a513055de"
-
-[rust-overlay]
-# Oxalica rust-overlay configuration
-# See https://github.com/oxalica/rust-overlay
 enabled = true
 
 [nix-filter]
-# Nix-filter configuration for source filtering
-# See https://github.com/numtide/nix-filter
 enabled = true

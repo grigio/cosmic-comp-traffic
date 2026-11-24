@@ -1630,6 +1630,7 @@ impl Common {
             &self.xdg_activation_state,
             &mut self.workspace_state.update(),
         );
+        crate::input::actions::cleanup_window_cycles(&self.shell.read());
         self.popups.cleanup();
         self.toplevel_info_state.refresh(&self.workspace_state);
         let toplevels = self
@@ -1638,6 +1639,7 @@ impl Common {
             .cloned()
             .collect::<Vec<_>>();
         self.wlr_foreign_toplevel_state.refresh(&toplevels);
+        self.gamma_control_state.cleanup();
         self.refresh_idle_inhibit();
         if let Some(mut a11y_keyboard_monitor) = self.dbus_state.a11y_keyboard_monitor() {
             a11y_keyboard_monitor.refresh();

@@ -51,6 +51,23 @@ struct WindowCycleState {
     last: Instant,
 }
 
+/// Drops expired Alt+Tab cycles so their strong window references do not keep
+/// closed surfaces alive until the seat is destroyed.
+pub(crate) fn cleanup_window_cycles(shell: &crate::shell::Shell) {
+    for seat in shell.seats.iter() {
+        let Some(cycle) = seat.user_data().get::<WindowCycle>() else {
+            continue;
+        };
+        let mut cycle = cycle.0.lock().unwrap();
+        if cycle
+            .as_ref()
+            .is_some_and(|state| state.last.elapsed() >= WINDOW_CYCLE_TIMEOUT)
+        {
+            *cycle = None;
+        }
+    }
+}
+
 fn has_surface(targets: &[KeyboardFocusTarget], target: &KeyboardFocusTarget) -> bool {
     target.active_window().is_some_and(|window| {
         targets
@@ -1125,10 +1142,12 @@ impl State {
         seat.user_data()
             .insert_if_missing_threadsafe(WindowCycle::default);
         let cycle = seat.user_data().get::<WindowCycle>().unwrap();
-        let mut cycle = cycle.0.lock().unwrap();
 
         let target = {
+            // Lock order is shell -> cycle everywhere, so the periodic cleanup
+            // (which runs with the shell lock held) cannot deadlock with this.
             let mut shell = self.common.shell.write();
+            let mut cycle = cycle.0.lock().unwrap();
             let Some(workspace) = shell.active_space_mut(&output) else {
                 return;
             };

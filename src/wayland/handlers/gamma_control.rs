@@ -5,6 +5,7 @@ use tracing::warn;
 
 use crate::{
     state::{BackendData, State},
+    utils::prelude::OutputExt,
     wayland::protocols::gamma_control::{
         GammaControlHandler, GammaControlState, delegate_gamma_control,
     },
@@ -20,6 +21,10 @@ impl GammaControlHandler for State {
             BackendData::Kms(kms) => kms.gamma_table_size(output),
             _ => None,
         }
+    }
+
+    fn gamma_outputs_share_crtc(&self, a: &Output, b: &Output) -> bool {
+        a == b || a.mirroring().as_ref() == Some(b) || b.mirroring().as_ref() == Some(a)
     }
 
     fn set_output_gamma(&mut self, output: &Output, table: Option<Vec<u16>>) {

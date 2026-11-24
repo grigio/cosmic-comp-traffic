@@ -55,28 +55,7 @@
       "inputs": {
         "nix-filter": "nix-filter",
         "nixpkgs": "nixpkgs",
-        "parts": "parts",
-        "rust": "rust"
-      }
-    },
-    "rust": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1794388042,
-        "narHash": "sha256-rsskkiDNmuZGK6Xk3JvWUxWENjuX4Jf0hOSFYujGC0s=",
-        "owner": "oxalica",
-        "repo": "rust-overlay",
-        "rev": "0070500a3d72ade21323092e7bdd7125c5268482",
-        "type": "github"
-      },
-      "original": {
-        "owner": "oxalica",
-        "repo": "rust-overlay",
-        "type": "github"
+        "parts": "parts"
       }
     }
   },

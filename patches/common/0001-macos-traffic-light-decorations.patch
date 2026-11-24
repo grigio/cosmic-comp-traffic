@@ -1,5 +1,18 @@
+# Rebased onto upstream/master (0681eaf6): CosmicWindowInternal now has plain
+# bool / cosmic::Theme fields and IcedElement::with_program takes &mut P.
+#
+# Review fix 1: drop the bg_divider suppression in push_render_elements. The
+# real focus ring is gated on `shell.active_hint && theme.cosmic().active_hint`,
+# but push_render_elements has no shell access (24 call sites), so plumbing the
+# flag through would be invasive. Upstream's divider behaviour is restored and
+# the reason is documented in a code comment at that site.
+#
+# Review fix 2: drop the redundant force_update() in set_activate.
+# SpaceElement::set_activate(&self.0, activated) queues a Focused/Unfocused
+# event and calls update(), which rebuilds the iced view with the `activated`
+# flag stored immediately above, so the traffic lights recolour without it.
 diff --git a/src/backend/render/mod.rs b/src/backend/render/mod.rs
-index 9ad61588..ed00fa68 100644
+index 9ad61588..d7122b2f 100644
 --- a/src/backend/render/mod.rs
 +++ b/src/backend/render/mod.rs
 @@ -188,6 +188,7 @@ impl From<Id> for Key {
@@ -10,20 +23,21 @@ index 9ad61588..ed00fa68 100644
      outer_radius: [u8; 4],
      alpha: f32,
      color: [f32; 3],
-@@ -216,16 +217,21 @@ impl IndicatorShader {
+@@ -216,16 +217,22 @@ impl IndicatorShader {
          scale: f64,
          active_window_hint: [f32; 3],
      ) -> PixelShaderElement {
 -        let t = thickness as i32;
-+        // The ring is feathered (see FEATHER in rounded_outline.frag), so the
-+        // element needs extra room outside the ring's outer edge or the glow
-+        // gets clipped by the element bounds.
-+        const PAD: u8 = 2;
-+        let t = thickness as i32 + PAD as i32;
++        // The ring is feathered (FEATHER in rounded_outline.frag), so the element
++        // needs extra room outside the ring's outer edge or the glow gets clipped.
++        // Keep the pad at least FEATHER and at least one physical pixel; at very
++        // low output scales 0.5/scale can exceed the old fixed pad of 2.
++        let pad = (0.5 / scale).ceil().max(2.0) as u8;
++        let t = thickness as i32 + pad as i32;
          element_geo.loc -= (t, t).into();
          element_geo.size += (t * 2, t * 2).into();
 -        let outer_radius = inner_radius.map(|r| r + thickness);
-+        let outer_radius = inner_radius.map(|r| r + thickness + PAD);
++        let outer_radius = inner_radius.map(|r| r + thickness + pad);
  
 -        IndicatorShader::element(
 +        IndicatorShader::element_with_pad(
@@ -31,11 +45,11 @@ index 9ad61588..ed00fa68 100644
              key,
              element_geo,
              thickness,
-+            PAD,
++            pad,
              outer_radius,
              alpha,
              scale,
-@@ -242,9 +248,35 @@ impl IndicatorShader {
+@@ -242,9 +249,35 @@ impl IndicatorShader {
          alpha: f32,
          scale: f64,
          color: [f32; 3],
@@ -71,7 +85,7 @@ index 9ad61588..ed00fa68 100644
              outer_radius,
              alpha,
              scale,
-@@ -283,6 +315,11 @@ impl IndicatorShader {
+@@ -283,6 +316,11 @@ impl IndicatorShader {
                          [color[0] * alpha, color[1] * alpha, color[2] * alpha],
                      ),
                      Uniform::new("thickness", thickness),
@@ -83,7 +97,7 @@ index 9ad61588..ed00fa68 100644
                      Uniform::new(
                          "radius",
                          [
-@@ -405,6 +442,10 @@ pub fn init_shaders(renderer: &mut GlesRenderer) -> Result<(), GlesError> {
+@@ -405,6 +443,10 @@ pub fn init_shaders(renderer: &mut GlesRenderer) -> Result<(), GlesError> {
          &[
              UniformName::new("color", UniformType::_3f),
              UniformName::new("thickness", UniformType::_1f),
@@ -188,7 +202,7 @@ index d3266e60..154f712f 100644
      #if defined(DEBUG_FLAGS)
      if (tint == 1.0)
 diff --git a/src/shell/element/window.rs b/src/shell/element/window.rs
-index 15277a07..1f021d7e 100644
+index 75502106..37c501e4 100644
 --- a/src/shell/element/window.rs
 +++ b/src/shell/element/window.rs
 @@ -17,7 +17,16 @@ use crate::{
@@ -209,7 +223,7 @@ index 15277a07..1f021d7e 100644
  use cosmic_comp_config::AppearanceConfig;
  use smithay::{
      backend::{
-@@ -76,7 +85,8 @@ use wayland_backend::server::ObjectId;
+@@ -68,7 +77,8 @@ use wayland_backend::server::ObjectId;
  
  use super::CosmicSurface;
  
@@ -219,33 +233,18 @@ index 15277a07..1f021d7e 100644
  pub const RESIZE_BORDER: i32 = 10;
  
  #[derive(Clone, PartialEq, Eq, Hash)]
-@@ -526,10 +536,14 @@ impl CosmicWindow {
+@@ -503,6 +513,10 @@ impl CosmicWindow {
              location
          };
  
--        let (mut geo, bg_divider) = self.0.with_program(|p| {
-+        let (mut geo, bg_divider, ring_drawn) = self.0.with_program(|p| {
-+            let theme = p.theme.lock().unwrap();
++        // The focus ring is gated on `shell.active_hint && theme.cosmic().active_hint`
++        // in the renderer; this helper has no `shell` access (24 call sites), so
++        // plumbing that flag here would be invasive. Keep drawing the bg_divider
++        // border as upstream does rather than suppressing it on activation.
+         let (mut geo, bg_divider) = self.0.with_program(|p| {
              (
                  SpaceElement::geometry(&p.window).to_f64(),
--                p.theme.lock().unwrap().cosmic().bg_divider(),
-+                theme.cosmic().bg_divider(),
-+                // The focused window is outlined by the focus ring instead, so
-+                // skip the divider border to avoid a second, grey outline.
-+                p.activated.load(Ordering::SeqCst) && theme.cosmic().active_hint > 0,
-             )
-         });
-         geo.loc += location.to_f64().to_logical(scale);
-@@ -540,7 +554,7 @@ impl CosmicWindow {
-             geo.size = geo.size.clamp(Size::default(), max_size.to_f64());
-         }
- 
--        if (has_ssd || clip) && !is_maximized {
-+        if (has_ssd || clip) && !is_maximized && !ring_drawn {
-             let window_key =
-                 CosmicMappedKey(CosmicMappedKeyInner::Window(Arc::downgrade(&self.0.0)));
- 
-@@ -872,29 +886,260 @@ impl Program for CosmicWindowInternal {
+@@ -844,29 +858,264 @@ impl Program for CosmicWindowInternal {
  #[derive(Debug)]
  pub struct DefaultDecorations;
  
@@ -261,9 +260,11 @@ index 15277a07..1f021d7e 100644
 +/// Diameter of a traffic light, matching macOS (and the 10px circles in the
 +/// labwc theme this copies).
 +const LIGHT_SIZE: f32 = 12.0;
-+/// Gap between the lights: 12px circles with 8px gaps gives the 20px centres
-+/// macOS uses.
-+const LIGHT_SPACING: u16 = 8;
++/// The mouse area extends 4px past each 12px circle, giving a 20x20 click
++/// target while keeping the visible 8px gap and macOS' 20px centres. The hit
++/// boxes touch but do not overlap, so each light owns its own clicks.
++const LIGHT_HIT_PADDING: u16 = 4;
++const LIGHT_SPACING: u16 = 0;
 +/// Titlebar content height. Kept in sync with SSD_HEIGHT, which cosmic-comp
 +/// uses for hit-testing and window geometry.
 +const HEADER_HEIGHT: f32 = SSD_HEIGHT as f32;
@@ -423,6 +424,8 @@ index 15277a07..1f021d7e 100644
 +    .width(Length::Fixed(LIGHT_SIZE))
 +    .height(Length::Fixed(LIGHT_SIZE));
 +
++    // Keep the drawn circle at LIGHT_SIZE but give it a friendlier hit target.
++    let light = widget::container(light).padding(LIGHT_HIT_PADDING);
 +    let mut light = widget::mouse_area(light);
 +    if let Some(message) = on_press {
 +        light = light.on_press(message);
@@ -434,16 +437,16 @@ index 15277a07..1f021d7e 100644
  impl Decorations<CosmicWindowInternal, Message> for DefaultDecorations {
      fn view(&self, win: &CosmicWindowInternal) -> cosmic::Element<'_, Message> {
          let sharp_corners = win.window.is_maximized(false)
-             || (win.is_tiled() && !win.appearance_conf.lock().unwrap().clip_tiled_windows);
+             || (win.is_tiled() && !win.appearance_conf.clip_tiled_windows);
 +        // Use the compositor's own activation flag. `window.is_activated(false)`
 +        // reads the client-acknowledged xdg_toplevel state, which only updates
 +        // after the client commits, so a freshly (de)focused window kept the
 +        // lights of its previous state until the next event rebuilt the view.
-+        let focused = win.activated.load(Ordering::SeqCst);
-+        let title = win.last_title.lock().unwrap().clone();
++        let focused = win.activated;
++        let title = win.last_title.clone();
  
 -        let mut header = cosmic::widget::header_bar()
--            .title(win.last_title.lock().unwrap().clone())
+-            .title(win.last_title.clone())
 -            .on_drag(Message::DragStart)
 -            .on_close(Message::Close)
 -            .focused(win.window.is_activated(false))
@@ -518,23 +521,23 @@ index 15277a07..1f021d7e 100644
      }
  }
  
-@@ -930,12 +1175,17 @@ impl SpaceElement for CosmicWindow {
-             .0
-             .with_program(|p| p.activated.load(Ordering::SeqCst) != activated)
-         {
+@@ -899,12 +1148,17 @@ impl SpaceElement for CosmicWindow {
+     }
+     fn set_activate(&self, activated: bool) {
+         if self.0.with_program(|p| p.activated != activated) {
 -            SpaceElement::set_activate(&self.0, activated);
 -            self.0.force_redraw();
 +            // Store the flag before rebuilding the view: `view()` reads it to
 +            // colour the traffic lights, so it has to be current by then.
              self.0.with_program(|p| {
-                 p.activated.store(activated, Ordering::SeqCst);
+                 p.activated = activated;
                  SpaceElement::set_activate(&p.window, activated);
              });
++            // `set_activate` queues a Focused/Unfocused event and calls update(),
++            // which rebuilds the iced view with the new flag above. That is the
++            // only update needed to recolour the lights: an extra force_update()
++            // would be redundant.
 +            SpaceElement::set_activate(&self.0, activated);
-+            // The decoration is an iced view with the activation state baked
-+            // in, so a plain redraw would keep the old traffic lights.
-+            // force_update() re-runs view().
-+            self.0.force_update();
          }
      }
      #[profiling::function]

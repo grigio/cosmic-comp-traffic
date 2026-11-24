@@ -291,6 +291,14 @@ impl Surface {
                     }
                     state.common.update_primary_output(&output_clone, &states);
                     let kms = state.backend.kms();
+                    // Snapshot before mutably borrowing `surface` from
+                    // `kms.drm_devices` below; the feedback callback needs to
+                    // know which formats failed EGL import.
+                    let failed_formats: HashMap<DrmNode, FormatSet> = kms
+                        .drm_devices
+                        .values()
+                        .map(|dev| (dev.inner.render_node, dev.failed_texture_formats.clone()))
+                        .collect();
                     let surface = &mut kms
                         .drm_devices
                         .get_mut(&dev_node)
@@ -308,14 +316,30 @@ impl Surface {
                             } else {
                                 // If we have freed the node, because it didn't have any active buffers/surfaces,
                                 // we might not be able to evaluate surface feedback yet.
-                                let render_formats =
+                                let renderer_formats =
                                     kms.api.single_renderer(&source_node).ok()?.dmabuf_formats();
+                                let render_formats = match failed_formats.get(&source_node) {
+                                    Some(failed) => renderer_formats
+                                        .iter()
+                                        .filter(|format| !failed.contains(format))
+                                        .copied()
+                                        .collect(),
+                                    None => renderer_formats,
+                                };
                                 // In contrast we must have the target node, if we have an active surface
-                                let target_formats = kms
+                                let renderer_target_formats = kms
                                     .api
                                     .single_renderer(&target_node)
                                     .unwrap()
                                     .dmabuf_formats();
+                                let target_formats = match failed_formats.get(&target_node) {
+                                    Some(failed) => renderer_target_formats
+                                        .iter()
+                                        .filter(|format| !failed.contains(format))
+                                        .copied()
+                                        .collect(),
+                                    None => renderer_target_formats,
+                                };
                                 let feedback = get_surface_dmabuf_feedback(
                                     source_node,
                                     target_node,

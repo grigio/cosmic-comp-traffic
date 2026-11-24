@@ -13,7 +13,10 @@
 
 pkgname=cosmic-comp-traffic
 pkgver=${COSMIC_COMP_VERSION:-1.11.0}
-pkgrel=${COSMIC_COMP_PKGREL:-1}
+# Single monotonic counter shared with the RPM spec and release CI. CI injects
+# the value; local builds read the same file so they are never "older" than a
+# published package.
+pkgrel=${COSMIC_COMP_PKGREL:-$(cat "${startdir:-.}/release-counter")}
 epoch=1
 pkgdesc='Compositor for the COSMIC desktop environment with macOS-style traffic-light decorations'
 arch=(x86_64)

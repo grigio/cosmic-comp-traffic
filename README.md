@@ -14,6 +14,24 @@ This is the COSMIC compositor with traffic-light close/minimize/maximize buttons
 - **Live theme reload** - Theme changes apply without restart
 - **Frame callback fixes** - Missing workspace set handling
 - **Output removal fixes** - Avoid unwrap panics on output removal
+- **Toplevel handle lifetime fixes** - Weak references avoid pinning closed windows and their GPU textures
+- **DMABUF import feedback fixes** - Stop advertising formats the compositor cannot import
+
+`patches/series` defines the common patch order. Every build uses the *effective*
+list derived from it: series entries with a same-named `patches/<version>/`
+override substituted, plus any version-only extras. For `epoch-1.11.0` that also
+includes `0009-clippy-needless-bool.patch`. Arch, RPM and the published release
+notes are all generated from that same list, so no patch is silently omitted.
+
+Support for `epoch-1.10.0` was dropped: packages are built for `epoch-1.11.0`
+and newer tags, plus pre-releases built from upstream master.
+
+The Nix flake and plain `cargo build` use the in-tree `src/` snapshot, which is
+kept in sync with the common series by `scripts/check-src-sync.sh` (also run in
+CI). To check that the patches apply to every supported tag, run
+`./scripts/check-patches.sh` (add `--offline` to skip fetching upstream tags,
+`--ref <rev>` to test an arbitrary ref, `--fmt` for formatting and
+`--include-rc` for fork rc tags).
 
 ## Prerequisites
 
@@ -136,14 +154,28 @@ cargo fmt --all -- --check
 nix develop --command cargo test
 ```
 
+### Maintenance
+
+- Bump `[package].version` in `nixpkgs.toml` when the supported upstream epoch
+  changes, and regenerate `flake.lock` whenever flake inputs change.
+
 ### CI Pipeline
 
 The CI runs:
+- **patch-sync** - `scripts/check-src-sync.sh` verifies `src/` matches the common series
 - **format** - `cargo fmt --all -- --check`
 - **clippy-check** - `cargo clippy --all-features -- -D warnings`
 - **check-features** - `cargo check` with various feature combinations
 - **test** - `cargo test --all-features` (with libseat built from source)
-- **nix-build** - `nix build .#default`
+- **nix-build** - `nix build .#default` (uses the hash in `cargoVendorHash.nix`)
+
+The release workflow computes the effective patch list once and rewrites the
+RPM spec's `PatchN:` / `%patchN` blocks and the release notes from it. RPM
+patches are no longer declared by hand in the spec. Arch `pkgrel` and RPM
+`Release` come from the single `release-counter` file (CI fails if it is not
+greater than the highest published build); bump that file when a rebuild is
+needed. Before building a pre-release from an upstream ref, the workflow also
+runs `scripts/check-patches.sh --ref` against that ref.
 
 ## Configuration
 
