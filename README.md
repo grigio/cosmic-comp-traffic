@@ -179,6 +179,26 @@ greater than the highest published build); bump that file when a rebuild is
 needed. Before building a pre-release from an upstream ref, the workflow also
 runs `scripts/check-patches.sh --ref` against that ref.
 
+## GTK4 / libadwaita window controls
+
+The traffic lights above are drawn by the compositor for server-side decorated
+windows. GTK4 and libadwaita apps draw their own window controls, so they need
+a separate user-CSS override to match:
+
+```bash
+./scripts/install-gtk4-traffic-lights.sh
+```
+
+The installer copies `resources/gtk4/traffic-lights/` into
+`~/.config/gtk-4.0/cosmic/`, installs the three hover glyphs as symbolic icons
+in `~/.local/share/icons/hicolor/`, and adds an `@import` to COSMIC's generated
+`dark.css` and `light.css`. Restart any open GTK4/libadwaita apps afterwards.
+
+COSMIC rewrites those generated files when a theme is applied, so re-run the
+installer if the override disappears after a theme change. The CSS values
+(colours, 12px circles, 20px centres, glyphs, inactive grey) mirror the
+compositor patch in `patches/common/0001-macos-traffic-light-decorations.patch`.
+
 ## Configuration
 
 The compositor uses COSMIC's standard configuration system. See [cosmic-comp](https://github.com/pop-os/cosmic-comp) for configuration details.

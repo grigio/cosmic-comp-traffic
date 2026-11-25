@@ -1,0 +1,119 @@
+/* GTK4 / libadwaita window controls matching the compositor's SSD lights.
+ *
+ * The numbers below are taken from
+ * patches/common/0001-macos-traffic-light-decorations.patch:
+ *   close #FF5F57, minimize #28C840, maximize #FEBC2E, inactive #636366
+ *   12px circles inside 20x20 hit boxes, zero spacing -> 20px centres.
+ *
+ * libadwaita loads its stylesheet from a gresource, so a traditional GTK
+ * theme cannot override it. This file must be pulled in from the user CSS at
+ * ~/.config/gtk-4.0/gtk.css (see scripts/install-gtk4-traffic-lights.sh).
+ */
+
+/* LIGHT_SPACING = 0 with 20px hit boxes gives the same 20px centres as
+ * 12px circles with an 8px gap. This is the "icon buttons spacing" fix. */
+windowcontrols {
+  border-spacing: 0;
+}
+
+windowcontrols > button.close:not(.raised),
+windowcontrols > button.minimize:not(.raised),
+windowcontrols > button.maximize:not(.raised),
+windowcontrols > button.restore:not(.raised) {
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+
+/* The circle is drawn on the image node; the symbolic glyph stays hidden
+ * until hover, exactly like the compositor's canvas program. */
+windowcontrols > button.close:not(.raised) > image,
+windowcontrols > button.minimize:not(.raised) > image,
+windowcontrols > button.maximize:not(.raised) > image,
+windowcontrols > button.restore:not(.raised) > image {
+  min-width: 12px;
+  min-height: 12px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background-image: none;
+  -gtk-icon-source: none;
+  -gtk-icon-shadow: none;
+  -gtk-icon-size: 12px;
+  color: transparent;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+
+/* Focused colours. */
+windowcontrols > button.close:not(.raised) > image {
+  background-color: #ff5f57;
+}
+
+windowcontrols > button.minimize:not(.raised) > image {
+  background-color: #28c840;
+}
+
+windowcontrols > button.maximize:not(.raised) > image,
+windowcontrols > button.restore:not(.raised) > image {
+  background-color: #febc2e;
+}
+
+/* Unfocused windows dim to grey, like the compositor's LIGHT_INACTIVE. */
+window:backdrop windowcontrols > button.close:not(.raised) > image,
+window:backdrop windowcontrols > button.minimize:not(.raised) > image,
+window:backdrop windowcontrols > button.maximize:not(.raised) > image,
+window:backdrop windowcontrols > button.restore:not(.raised) > image {
+  background-color: #636366;
+}
+
+/* Hover: lighten the circle 1.12x and reveal a black glyph at 55% alpha. */
+windowcontrols > button.close:hover:not(.raised) > image {
+  background-color: #ff6a61;
+  color: rgba(0, 0, 0, 0.55);
+  -gtk-icon-source: -gtk-icontheme("cosmic-traffic-close-symbolic");
+}
+
+windowcontrols > button.minimize:hover:not(.raised) > image {
+  background-color: #2ce048;
+  color: rgba(0, 0, 0, 0.55);
+  -gtk-icon-source: -gtk-icontheme("cosmic-traffic-minimize-symbolic");
+}
+
+windowcontrols > button.maximize:hover:not(.raised) > image,
+windowcontrols > button.restore:hover:not(.raised) > image {
+  background-color: #ffd233;
+  color: rgba(0, 0, 0, 0.55);
+  -gtk-icon-source: -gtk-icontheme("cosmic-traffic-maximize-symbolic");
+}
+
+/* Unfocused hover: 1.25x lighter grey, glyph at 35% alpha. */
+window:backdrop windowcontrols > button.close:hover:not(.raised) > image,
+window:backdrop windowcontrols > button.minimize:hover:not(.raised) > image,
+window:backdrop windowcontrols > button.maximize:hover:not(.raised) > image,
+window:backdrop windowcontrols > button.restore:hover:not(.raised) > image {
+  background-color: #7c7c80;
+  color: rgba(0, 0, 0, 0.35);
+}
+
+/* Pressed state: slightly darker than hover, still showing the glyph. */
+windowcontrols > button.close:active:not(.raised) > image {
+  background-color: #e65650;
+  color: rgba(0, 0, 0, 0.55);
+  -gtk-icon-source: -gtk-icontheme("cosmic-traffic-close-symbolic");
+}
+
+windowcontrols > button.minimize:active:not(.raised) > image {
+  background-color: #23b038;
+  color: rgba(0, 0, 0, 0.55);
+  -gtk-icon-source: -gtk-icontheme("cosmic-traffic-minimize-symbolic");
+}
+
+windowcontrols > button.maximize:active:not(.raised) > image,
+windowcontrols > button.restore:active:not(.raised) > image {
+  background-color: #dfa529;
+  color: rgba(0, 0, 0, 0.55);
+  -gtk-icon-source: -gtk-icontheme("cosmic-traffic-maximize-symbolic");
+}
