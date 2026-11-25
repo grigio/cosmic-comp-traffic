@@ -6,7 +6,7 @@ set -euo pipefail
 # Resolve symlinks so the script also works when linked into ~/bin or PATH.
 script_path="$(readlink -f "${BASH_SOURCE[0]}")"
 repo_root="$(cd "$(dirname "$script_path")/.." && pwd)"
-src_dir="$repo_root/resources/gtk4/traffic-lights"
+src_dir="$repo_root/assets/gtk4/traffic-lights"
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/gtk-4.0"
 cosmic_dir="$config_dir/cosmic"
 dest_dir="$cosmic_dir/traffic-lights"

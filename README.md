@@ -189,7 +189,7 @@ a separate user-CSS override to match:
 ./scripts/install-gtk4-traffic-lights.sh
 ```
 
-The installer copies `resources/gtk4/traffic-lights/` into
+The installer copies `assets/gtk4/traffic-lights/` into
 `~/.config/gtk-4.0/cosmic/`, installs the three hover glyphs as symbolic icons
 in `~/.local/share/icons/hicolor/`, and adds an `@import` to COSMIC's generated
 `dark.css` and `light.css`. Restart any open GTK4/libadwaita apps afterwards.
