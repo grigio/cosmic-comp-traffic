@@ -117,3 +117,111 @@ windowcontrols > button.restore:active:not(.raised) > image {
   color: rgba(0, 0, 0, 0.55);
   -gtk-icon-source: -gtk-icontheme("cosmic-traffic-maximize-symbolic");
 }
+
+/* -------------------------------------------------------------------------
+ * GTK3 header bars use button.titlebutton instead of GtkWindowControls.
+ * COSMIC points ~/.config/gtk-3.0/gtk.css at the same generated file as GTK4,
+ * so these rules ride along with the import above and stay in sync.
+ * Only the close/minimize/maximize controls inside a title bar are touched.
+ * window.background raises specificity over the theme's 24px rules;
+ * GTK's CSS parser does not support !important.
+ * ---------------------------------------------------------------------- */
+
+/* 12px circle + 4px side margins = 20px centres, like the compositor. */
+window.background headerbar button.titlebutton.close,
+window.background headerbar button.titlebutton.minimize,
+window.background headerbar button.titlebutton.maximize,
+window.background .titlebar button.titlebutton.close,
+window.background .titlebar button.titlebutton.minimize,
+window.background .titlebar button.titlebutton.maximize {
+  min-width: 12px;
+  min-height: 12px;
+  margin: 0 4px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  box-shadow: none;
+  color: transparent;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+
+window headerbar button.titlebutton.close image,
+window headerbar button.titlebutton.minimize image,
+window headerbar button.titlebutton.maximize image,
+window .titlebar button.titlebutton.close image,
+window .titlebar button.titlebutton.minimize image,
+window .titlebar button.titlebutton.maximize image {
+  /* A stock icon has a 16px minimum; let the button shrink to the 12px dot. */
+  min-width: 0;
+  min-height: 0;
+  margin: -2px;
+  color: transparent;
+  -gtk-icon-source: none;
+  -gtk-icon-shadow: none;
+}
+
+window headerbar button.titlebutton.close,
+window .titlebar button.titlebutton.close { background-color: #ff5f57; }
+window headerbar button.titlebutton.minimize,
+window .titlebar button.titlebutton.minimize { background-color: #28c840; }
+window headerbar button.titlebutton.maximize,
+window .titlebar button.titlebutton.maximize { background-color: #febc2e; }
+
+window:backdrop headerbar button.titlebutton.close,
+window:backdrop .titlebar button.titlebutton.close,
+window:backdrop headerbar button.titlebutton.minimize,
+window:backdrop .titlebar button.titlebutton.minimize,
+window:backdrop headerbar button.titlebutton.maximize,
+window:backdrop .titlebar button.titlebutton.maximize {
+  background-color: #636366;
+}
+
+window headerbar button.titlebutton.close:hover,
+window .titlebar button.titlebutton.close:hover { background-color: #ff6a61; }
+window headerbar button.titlebutton.minimize:hover,
+window .titlebar button.titlebutton.minimize:hover { background-color: #2ce048; }
+window headerbar button.titlebutton.maximize:hover,
+window .titlebar button.titlebutton.maximize:hover { background-color: #ffd233; }
+
+window headerbar button.titlebutton.close:hover image,
+window .titlebar button.titlebutton.close:hover image {
+  color: rgba(0, 0, 0, 0.55);
+  -gtk-icon-source: -gtk-icontheme("cosmic-traffic-close-symbolic");
+}
+
+window headerbar button.titlebutton.minimize:hover image,
+window .titlebar button.titlebutton.minimize:hover image {
+  color: rgba(0, 0, 0, 0.55);
+  -gtk-icon-source: -gtk-icontheme("cosmic-traffic-minimize-symbolic");
+}
+
+window headerbar button.titlebutton.maximize:hover image,
+window .titlebar button.titlebutton.maximize:hover image {
+  color: rgba(0, 0, 0, 0.55);
+  -gtk-icon-source: -gtk-icontheme("cosmic-traffic-maximize-symbolic");
+}
+
+window:backdrop headerbar button.titlebutton.close:hover,
+window:backdrop .titlebar button.titlebutton.close:hover,
+window:backdrop headerbar button.titlebutton.minimize:hover,
+window:backdrop .titlebar button.titlebutton.minimize:hover,
+window:backdrop headerbar button.titlebutton.maximize:hover,
+window:backdrop .titlebar button.titlebutton.maximize:hover {
+  background-color: #7c7c80;
+}
+
+window:backdrop headerbar button.titlebutton.close:hover image,
+window:backdrop .titlebar button.titlebutton.close:hover image,
+window:backdrop headerbar button.titlebutton.minimize:hover image,
+window:backdrop .titlebar button.titlebutton.minimize:hover image,
+window:backdrop headerbar button.titlebutton.maximize:hover image,
+window:backdrop .titlebar button.titlebutton.maximize:hover image {
+  color: rgba(0, 0, 0, 0.35);
+}
+
+window headerbar button.titlebutton.close:active,
+window .titlebar button.titlebutton.close:active { background-color: #e65650; }
+window headerbar button.titlebutton.minimize:active,
+window .titlebar button.titlebutton.minimize:active { background-color: #23b038; }
+window headerbar button.titlebutton.maximize:active,
+window .titlebar button.titlebutton.maximize:active { background-color: #dfa529; }

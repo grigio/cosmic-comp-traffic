@@ -179,11 +179,12 @@ greater than the highest published build); bump that file when a rebuild is
 needed. Before building a pre-release from an upstream ref, the workflow also
 runs `scripts/check-patches.sh --ref` against that ref.
 
-## GTK4 / libadwaita window controls
+## GTK3 / GTK4 / libadwaita window controls
 
 The traffic lights above are drawn by the compositor for server-side decorated
-windows. GTK4 and libadwaita apps draw their own window controls, so they need
-a separate user-CSS override to match:
+windows. GTK3, GTK4 and libadwaita apps draw their own window controls, so they
+need a separate user-CSS override to match. Only the close, minimize and
+maximize controls are restyled:
 
 ```bash
 ./scripts/install-gtk4-traffic-lights.sh
@@ -192,7 +193,12 @@ a separate user-CSS override to match:
 The installer copies `assets/gtk4/traffic-lights/` into
 `~/.config/gtk-4.0/cosmic/`, installs the three hover glyphs as symbolic icons
 in `~/.local/share/icons/hicolor/`, and adds an `@import` to COSMIC's generated
-`dark.css` and `light.css`. Restart any open GTK4/libadwaita apps afterwards.
+`dark.css` and `light.css`. It also links `~/.config/gtk-3.0/cosmic` to the same
+generated CSS so GTK3 apps pick up the override. Restart any open GTK apps
+afterwards.
+
+Chromium-based browsers such as Brave draw their own window buttons with
+Chromium Views rather than GTK widgets, so GTK CSS cannot restyle them.
 
 COSMIC rewrites those generated files when a theme is applied, so re-run the
 installer if the override disappears after a theme change. The CSS values

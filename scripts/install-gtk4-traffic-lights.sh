@@ -8,11 +8,15 @@ script_path="$(readlink -f "${BASH_SOURCE[0]}")"
 repo_root="$(cd "$(dirname "$script_path")/.." && pwd)"
 src_dir="$repo_root/assets/gtk4/traffic-lights"
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/gtk-4.0"
+gtk3_dir="${XDG_CONFIG_HOME:-$HOME/.config}/gtk-3.0"
 cosmic_dir="$config_dir/cosmic"
 dest_dir="$cosmic_dir/traffic-lights"
 data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
 icons_root="$data_dir/icons/hicolor"
-icons_dir="$icons_root/symbolic/actions"
+# Do NOT create a hicolor/index.theme here: that would shadow the system
+# theme and hide icons such as Brave's launcher icon. GTK finds symbolic icons
+# in scalable/actions without an index.theme.
+icons_dir="$icons_root/scalable/actions"
 # GTK resolves @import relative to ~/.config/gtk-4.0/gtk.css (the path GTK
 # opens), not the real path behind COSMIC's gtk.css symlink.
 import_line='@import "cosmic/traffic-lights/traffic-lights.css";'
@@ -22,36 +26,20 @@ if [[ ! -f "$src_dir/traffic-lights.css" ]]; then
     exit 1
 fi
 
-mkdir -p "$dest_dir" "$icons_dir"
+mkdir -p "$dest_dir" "$icons_dir" "$gtk3_dir"
 install -m 0644 "$src_dir/traffic-lights.css" "$dest_dir/"
+
+# COSMIC links gtk-3.0/gtk.css at the GTK4 generated file too. GTK3 resolves
+# @import relative to gtk-3.0/, so give it a cosmic/ symlink as well; both
+# toolkits then read the same override and stay in sync.
+if [[ ! -e "$gtk3_dir/cosmic" ]]; then
+    ln -s "$cosmic_dir" "$gtk3_dir/cosmic"
+fi
 install -m 0644 "$src_dir"/*.svg "$icons_dir/"
 
-# The glyphs are symbolic icons looked up through the icon theme. GTK ignores
-# a hicolor theme without an index.theme, even when a cache exists.
-if [[ ! -f "$icons_root/index.theme" ]]; then
-    dirs=("symbolic/actions")
-    for sub in "$icons_root"/*/*; do
-        [[ -d "$sub" ]] || continue
-        rel="${sub#"$icons_root/"}"
-        [[ " ${dirs[*]} " == *" $rel "* ]] || dirs+=("$rel")
-    done
-    {
-        echo "[Icon Theme]"
-        echo "Name=hicolor"
-        echo "Comment=Fallback icon theme"
-        printf 'Directories=%s\n' "$(IFS=,; echo "${dirs[*]}")"
-        for rel in "${dirs[@]}"; do
-            context="${rel##*/}"
-            echo "[$rel]"
-            echo "Size=128"
-            echo "Type=Scalable"
-            echo "Context=${context^}"
-        done
-    } > "$icons_root/index.theme"
-fi
-
 if command -v gtk4-update-icon-cache >/dev/null 2>&1; then
-    gtk4-update-icon-cache -q -f "$icons_root" 2>/dev/null || true
+    # -t ignores the missing theme index; the system hicolor theme owns that.
+    gtk4-update-icon-cache -q -f -t "$icons_root" 2>/dev/null || true
 fi
 
 # COSMIC's theme writer owns dark.css/light.css. Put the import right after
